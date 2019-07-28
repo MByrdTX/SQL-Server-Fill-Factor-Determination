@@ -3,7 +3,7 @@ A procedure to determine and assign fill factor to every index in a SQL Server d
 
 A Self-Tuning Fill Factor Technique for SQL Server – Part 1
 										By Mike Byrd
-										     ByrdNest Consulting
+										   ByrdNest Consulting
 
 Intoduction
 So what’s all the fuss about Fill Factor?  It is a SQL Server parameter I’ve ignored for 20+ years.  The main reason was/is I’ve had no idea about what value to use.  There is just no documented definitive guidance.  
