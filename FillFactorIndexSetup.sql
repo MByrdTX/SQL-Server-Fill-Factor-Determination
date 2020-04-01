@@ -119,3 +119,37 @@ ALTER EVENT SESSION [SQLskills_TrackPageSplits]
 ON SERVER
 STATE=START;
 GO
+
+
+USE ROICore
+GO
+
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE Admin.BadPageSplits(
+	ID INT IDENTITY(1,1) NOT NULL,
+	CREATEDATE datetime NOT NULL,
+	TableName sysname NOT NULL,
+	IndexName sysname NOT NULL,
+	PartitionNum int NOT NULL,
+	Current_Fragmentation float NOT NULL,
+	BadPageSplits bigint NULL,
+	[FillFactor] int NULL,
+	Object_ID int NULL,
+	Index_ID int NULL,
+	Page_Count bigint NULL,
+	Record_Count bigint NULL,
+ CONSTRAINT PK_BadPageSplits PRIMARY KEY 
+	(ID ASC)
+	WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, DATA_COMPRESSION = ROW) 
+) 
+GO
+
+ALTER TABLE Admin.BadPageSplits ADD  DEFAULT (getdate()) FOR CREATEDATE
+GO
+
+
