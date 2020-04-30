@@ -1,4 +1,4 @@
---© 2019 | ByrdNest Consulting
+--© 2020 | ByrdNest Consulting
 
 -- ensure a USE <databasename> statement has been executed first. 
 --USE <Database>    
@@ -217,7 +217,7 @@ BEGIN
                   ELSE sub.BadPageSplit/sub.page_count END DESC   
 
 IF @ShowProcessSteps = 1 
-    SELECT * FROM #work_to_do
+    SELECT '#work_to_do, Line 220',* FROM #work_to_do
 
 /**********************************************************************
 Save all BadPageSplit history per day
@@ -374,7 +374,7 @@ SET @command = N'
                                             THEN 90
                                         ELSE 100 END, --reset CI back to 100
                         FixFillFactor = NULL          --reset FixFillFactor so that 
-                                                      --  regression can begin
+                                                      --  regression can start
 
 /**********************************************************************
     Reset fixfillfactor from previous passes (need to reset it for 
@@ -408,8 +408,8 @@ SET @command = N'
                         ,NULL,NULL,NULL,@RowCount [Redo_Flag]
                     FROM #Temp2    
             IF @ShowProcessSteps = 1 
-                SELECT * FROM #work_to_do
-          END
+                SELECT 'New row in #work_to_do',* FROM #work_to_do
+          END	--Begin at Line 360
 
 
     -- Declare the cursor for the list of indexes to be processed. 
@@ -419,22 +419,49 @@ SET @command = N'
             SELECT  DISTINCT w.objectid, w.indexid
                     , w.partitionnum, w.frag,w.Fill_Factor
                     ,w.TableName, w.IndexName
-                    ,DATEDIFF(dd,sub.CreateDate,GETDATE()) LagDate
+                    ,DATEDIFF(dd,sub2.CreateDate,GETDATE()) LagDate
                     ,Redo_Flag
                 FROM #work_to_do w
                 JOIN sys.indexes i
                   ON  i.object_id = w.objectid
                   AND i.index_id  = w.indexid
-                LEFT JOIN (SELECT TableName, IndexName, PartitionNum
-                                 , MAX(CreateDate) CreateDate 
-                             FROM [Admin].AgentIndexRebuilds r 
-                             WHERE r.DBName  = @Database
-							   AND r.DelFlag = 0
-                             GROUP BY TableName,IndexName,PartitionNum) sub
-                  ON  sub.TableName    = OBJECT_NAME(w.ObjectID)
-                  AND sub.IndexName    = i.[name] 
-                  AND sub.PartitionNum = w.partitionnum
+                LEFT JOIN (SELECT TableName, IndexName,PartitionNum, CreateDate FROM	--this double logic (rownumber) added 4/19/2020 to cover earlier error putting multiple entries in AgentIndexRebuild table.
+								(SELECT TableName, IndexName, PartitionNum, CreateDate
+								     , Row_Number() OVER (PARTITION BY TableName,IndexName,PartitionNum
+														  ORDER BY CreateDate DESC, ID DESC) RowNumber
+								 FROM [Admin].AgentIndexRebuilds r 
+								 WHERE r.DBName  = @Database
+								   AND r.DelFlag = 0
+								 /*GROUP BY TableName,IndexName,PartitionNum*/) sub
+							WHERE sub.RowNumber = 1 ) sub2
+                  ON  sub2.TableName    = OBJECT_NAME(w.ObjectID)
+                  AND sub2.IndexName    = i.[name] 
+                  AND sub2.PartitionNum = w.partitionnum
                 ORDER BY w.Frag DESC    
+
+		IF @ShowProcessSteps = 1 
+            SELECT  DISTINCT 'CursorDefinition',w.objectid, w.indexid
+                    , w.partitionnum, w.frag,w.Fill_Factor
+                    ,w.TableName, w.IndexName
+                    ,DATEDIFF(dd,sub2.CreateDate,GETDATE()) LagDate
+                    ,Redo_Flag
+                FROM #work_to_do w
+                JOIN sys.indexes i
+                  ON  i.object_id = w.objectid
+                  AND i.index_id  = w.indexid
+                LEFT JOIN (SELECT TableName, IndexName,PartitionNum, CreateDate FROM
+								(SELECT TableName, IndexName, PartitionNum, CreateDate
+								     , Row_Number() OVER (PARTITION BY TableName,IndexName,PartitionNum
+														  ORDER BY CreateDate DESC, ID DESC) RowNumber
+								 FROM [Admin].AgentIndexRebuilds r 
+								 WHERE r.DBName  = @Database
+								   AND r.DelFlag = 0
+								 GROUP BY TableName,IndexName,PartitionNum) sub
+							WHERE sub.RowNumber = 1 ) sub2
+                  ON  sub2.TableName    = OBJECT_NAME(w.ObjectID)
+                  AND sub2.IndexName    = i.[name] 
+                  AND sub2.PartitionNum = w.partitionnum
+                ORDER BY w.Frag DESC;    
 
             -- Open the cursor. 
         OPEN [workcursor]     
@@ -518,8 +545,8 @@ SET @command = N'
                       AND Index_ID      = @indexid
                       AND PartitionNum  = @partitionnum
                       AND DelFlag       = 0
-			  END
-          END
+			  END	--Begin at Line 539
+          END		--Begin at Line 501
 
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
@@ -607,8 +634,8 @@ SET @command = N'
                           AND Index_ID     = @indexid
                           AND PartitionNum = @partitionnum
 						  AND DelFlag      = 0
-                  END
-                END
+                  END		--Begin at Line 627
+                END		--Begin at Line 591
             ELSE
                 SET @FillFactor = CASE WHEN @FixFillFactor IS NOT NULL
                                        THEN  @FixFillFactor
@@ -667,10 +694,11 @@ SET @command = N'
 						IF @Retry = 0
 							SELECT 'Retry errored out for', @Command
 					END CATCH
-				END
+				END		--Begin at Line 685
 
                 --insert results into history table (AgentIndexRebuilds)
         IF @PartitionFlag = 0 AND @WorkDay = 1
+		  BEGIN
             INSERT [Admin].AgentIndexRebuilds (CREATEDATE, DBName
                     , SchemaName, TableName, IndexName, PartitionNum
                     , Current_Fragmentation, New_fragmentation
@@ -699,41 +727,79 @@ SET @command = N'
                           AND ps.index_level      = 0
                         JOIN sys.dm_db_index_operational_stats
                              (DB_ID(@Database),@objectid,@indexid,@partitionnum) ios
-                          ON  ios.index_id         = ps.index_id
-                          AND ios.object_id        = ps.object_id
-                          AND ios.partition_number = ps.partition_number
+                          ON  ios.index_id         = w.indexid
+                          AND ios.object_id        = w.objectid
+                          AND ios.partition_number = w.partitionnum
                         WHERE w.indexid            = @indexid
                           AND w.objectid           = @objectid
                           AND w.partitionnum       = @partitionnum
-                          AND ps.index_level = 0    
+                          AND ps.index_level = 0;   
+			IF @ShowProcessSteps = 1
+				BEGIN
+					SELECT '#work_to_do',* FROM #work_to_do w
+                        WHERE w.indexid            = @indexid
+                          AND w.objectid           = @objectid
+                          AND w.partitionnum       = @partitionnum;
+					SELECT 'sys.dm_db_index_physical_stats',* FROM sys.dm_db_index_physical_stats 
+                             (DB_ID(@Database),@objectid,@indexid,@partitionnum
+                             ,'SAMPLED');
+					SELECT 'sys.dm_db_index_operational_stats',* FROM sys.dm_db_index_operational_stats
+                             (DB_ID(@Database),@objectid,@indexid,@partitionnum);
+                    SELECT @DATE,@Database,@schemaname,@objectname
+                          ,@indexname,@partitionnum,@frag
+                          , ps.avg_fragmentation_in_percent
+                          ,w.PAGE_SPLIT_FOR_INDEX,w.BadPageSplit,ios.LEAF_ALLOCATION_COUNT
+                          ,w.PAGE_ALLOCATION_CAUSED_BY_PAGESPLIT
+                        ,ios.NONLEAF_ALLOCATION_COUNT,@FillFactor,w.objectid
+                        ,w.indexid,w.page_count,w.record_count
+                        ,w.forwarded_record_count,ps.forwarded_record_count
+                        ,@LagDate,@FixFillFactor,0
+                        FROM #work_to_do w
+                        JOIN sys.dm_db_index_physical_stats 
+                             (DB_ID(@Database),@objectid,@indexid,@partitionnum
+                             ,'SAMPLED') ps
+                          ON  ps.index_id         = w.indexid
+                          AND ps.object_id        = w.objectid
+                          AND ps.partition_number = w.partitionnum
+                          AND ps.index_level      = 0
+                        JOIN sys.dm_db_index_operational_stats
+                             (DB_ID(@Database),@objectid,@indexid,@partitionnum) ios
+                          ON  ios.index_id         = w.indexid
+                          AND ios.object_id        = w.objectid
+                          AND ios.partition_number = w.partitionnum
+                        WHERE w.indexid            = @indexid
+                          AND w.objectid           = @objectid
+                          AND w.partitionnum       = @partitionnum
+                          AND ps.index_level = 0;   
+				END		--BEGIN at Line 738
+		  END	--Begin at 701		
 
-             SET @PartitionFlag = 0    
-             FETCH NEXT 
-                 FROM [workcursor] 
+             SET @PartitionFlag = 0;    
+             FETCH NEXT FROM [workcursor] 
                  INTO @objectid, @indexid, @partitionnum, @frag
-                ,@FillFactor,@objectname,@indexname,@LagDate,@RowCount     
-           END     
+                ,@FillFactor,@objectname,@indexname,@LagDate,@RowCount;    
+      END		--Begin at line 475  
           -- Close and deallocate the cursor. 
-            CLOSE [workcursor]     
-            DEALLOCATE [workcursor]     
+            CLOSE [workcursor];     
+            DEALLOCATE [workcursor];    
          IF @ShowProcessSteps = 1 
-			PRINT 'CLOSE [workcursor] '       
+			PRINT 'CLOSE [workcursor] ';      
 
             --clean up
             IF OBJECT_ID(N'tempdb..#Temp2') IS NOT NULL 
-                DROP TABLE #Temp2    
+                DROP TABLE #Temp2;   
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL 
-                DROP TABLE #Temp3    
-          END    
-    IF OBJECT_ID(N'tempdb..#work_to_do') IS NOT NULL DROP TABLE #work_to_do     
+                DROP TABLE #Temp3;  
+      END --Begin at Line 417  
+    IF OBJECT_ID(N'tempdb..#work_to_do') IS NOT NULL DROP TABLE #work_to_do;    
     IF @ShowProcessSteps = 1 
-		PRINT 'cleanup'
+		PRINT 'cleanup';
 
     --Data retention
     DELETE [Admin].AgentIndexRebuilds
         WHERE  CreateDate < DATEADD(yy,-3,GETDATE())
-		   OR (CreateDate < DATEADD(yy,-1,GETDATE()) AND DelFlag = 1)
+		   OR (CreateDate < DATEADD(yy,-1,GETDATE()) AND DelFlag = 1);
     IF @ShowProcessSteps = 1 
-		PRINT 'Data retention'
-END    
+		PRINT 'Data retention';
+END		--Begin at Line 91 
 GO
