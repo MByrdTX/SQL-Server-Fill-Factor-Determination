@@ -52,7 +52,7 @@ GO
     TO THE IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A
     PARTICULAR PURPOSE. 
 
-    Created         By                Comments
+    Created         By               Comments
     20190424        Mike Byrd        Created
     20190513        Mike Byrd        Added additional data columns to 
                                          AgentIndexRebuilds table
@@ -68,11 +68,11 @@ GO
 
 
 --Set Configuration parameters
-DECLARE @RedoPeriod          INT     = 90    --Days
-DECLARE @TopWorkCount        INT     = 20    --Specify how large result 
+DECLARE @RedoPeriod          INT     = 90;    --Days
+DECLARE @TopWorkCount        INT     = 20;    --Specify how large result 
 
-DECLARE @ShowDynamicSQLCommands bit = 1 -- show dynamic SQL commands before they run
-DECLARE @ShowProcessSteps bit = 0 -- show where we are in the code
+DECLARE @ShowDynamicSQLCommands bit = 1; -- show dynamic SQL commands before they run
+DECLARE @ShowProcessSteps bit = 0; -- show where we are in the code
                                              --     set for Work_to_Do
 --  --get current database name
 DECLARE @Database            SYSNAME = (SELECT DB_NAME());
@@ -84,50 +84,50 @@ DECLARE @Retry				 INT = 10;
 code setup for Always On Primary Node; comment out next 4 statements
       if not an Always On Node
 **********************************************************************/
-  DECLARE @preferredReplica INT
-  SET @preferredReplica 
-    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
-  IF (@preferredReplica = 0) 
+--  DECLARE @preferredReplica INT
+--  SET @preferredReplica 
+--    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
+--  IF (@preferredReplica = 0) 
 BEGIN
-    DECLARE @Date                                DATETIME = GETDATE()    
-    DECLARE @RowCount                            INT = 0    
-    DECLARE @objectid                            INT     
-    DECLARE @indexid                             INT     
-    DECLARE @partitioncount                      BIGINT     
-    DECLARE @schemaname                          SYSNAME     
-    DECLARE @objectname                          SYSNAME     
-    DECLARE @indexname                           SYSNAME     
-    DECLARE @partitionnum                        BIGINT     
-    DECLARE @partitions                          BIGINT     
-    DECLARE @frag                                FLOAT     
-    DECLARE @FillFactor                          INT    
-    DECLARE @OldFillFactor                       INT    
-    DECLARE @FixFillFactor                       INT    
-    DECLARE @LagDate                             INT    
-    DECLARE @NewFrag                             FLOAT    
-    DECLARE @NewPageSplitForIndex                BIGINT    
-    DECLARE @NewPageAllocationCausedByPageSplit  BIGINT    
-    DECLARE @PageCount                           BIGINT    
-    DECLARE @RecordCount                         BIGINT    
-    DECLARE @ForwardRecordCount                  BIGINT    
-    DECLARE @NewForwardRecordCount               BIGINT    
-    DECLARE @Command                             NVARCHAR(4000)    
-    DECLARE @Msg                                 VARCHAR(256)    
-    DECLARE @PartitionFlag                       BIT = 0  
+    DECLARE @Date                                DATETIME = GETDATE();    
+    DECLARE @RowCount                            INT = 0;    
+    DECLARE @objectid                            INT;     
+    DECLARE @indexid                             INT;    
+    DECLARE @partitioncount                      BIGINT;    
+    DECLARE @schemaname                          SYSNAME;     
+    DECLARE @objectname                          SYSNAME;     
+    DECLARE @indexname                           SYSNAME;     
+    DECLARE @partitionnum                        BIGINT;     
+    DECLARE @partitions                          BIGINT;     
+    DECLARE @frag                                FLOAT;     
+    DECLARE @FillFactor                          INT;    
+    DECLARE @OldFillFactor                       INT;    
+    DECLARE @FixFillFactor                       INT;    
+    DECLARE @LagDate                             INT;    
+    DECLARE @NewFrag                             FLOAT;    
+    DECLARE @NewPageSplitForIndex                BIGINT;    
+    DECLARE @NewPageAllocationCausedByPageSplit  BIGINT;    
+    DECLARE @PageCount                           BIGINT;    
+    DECLARE @RecordCount                         BIGINT;    
+    DECLARE @ForwardRecordCount                  BIGINT;    
+    DECLARE @NewForwardRecordCount               BIGINT;    
+    DECLARE @Command                             NVARCHAR(4000);    
+    DECLARE @Msg                                 VARCHAR(256);    
+    DECLARE @PartitionFlag                       BIT = 0;  
                                                             --don't perturb fillfactor on Saturdays or Sundays
     DECLARE @WorkDay                             BIT = 	CASE WHEN DATEPART(dw,@Date) IN (1,7) THEN 0
-                                                            ELSE 1 END  
-    DECLARE @Online_On_String                    NVARCHAR(15) = N''
-    DECLARE @MaxID                                INT
-    DECLARE @MinID                                INT
-    DECLARE @MaxRowNumber                        INT
-    DECLARE @MinRowNumber                        INT
-    DECLARE @FragRowNumber                        INT
-    DECLARE @MinFrag                            FLOAT
-    DECLARE @MinFragID                            INT
-    DECLARE @MinFragBadPageSplits                INT
-    DECLARE @NewFillFactor                        INT
-    SET NOCOUNT ON     
+                                                            ELSE 1 END;  
+    DECLARE @Online_On_String                    NVARCHAR(15) = N'';
+    DECLARE @MaxID                               INT;
+    DECLARE @MinID                               INT;
+    DECLARE @MaxRowNumber                        INT;
+    DECLARE @MinRowNumber                        INT;
+    DECLARE @FragRowNumber                       INT;
+    DECLARE @MinFrag                             FLOAT;
+    DECLARE @MinFragID                           INT;
+    DECLARE @MinFragBadPageSplits                INT;
+    DECLARE @NewFillFactor                       INT;
+    SET NOCOUNT ON;     
     SET QUOTED_IDENTIFIER ON;                --needed for XML ops in query below
  
     IF LOWER(@@VERSION) LIKE '%enterprise edition%' 
@@ -199,14 +199,15 @@ BEGIN
         WHERE i.index_id           > 0
           AND o.[type]             = 'U'
           AND ps.avg_fragmentation_in_percent > 1.20   --this is rebuild condition
-          AND ps.index_level       = 0 
-		  AND NOT EXISTS (SELECT 1 FROM [Admin].AgentIndexRebuilds air		-- logic to keep from getting fillfactor already set
+          AND ps.index_level       = 0
+		  -- logic added to still defrag on weekends and tweak fillfactor on weekdays
+		  AND (@WorkDay = 0 OR (@WorkDay = 1  AND NOT EXISTS (SELECT 1 FROM [Admin].AgentIndexRebuilds air		-- logic to keep from getting fillfactor already set
 							WHERE air.DBName			= @Database
 							  AND air.[Object_ID]		= ps.[object_id]
 							  AND air.Index_ID			= ps.index_id
 							  AND air.PartitionNum		= ps.partition_number
 							  AND air.FixFillFactor		IS NOT NULL
-							  AND air.DelFlag			= 0)	) sub
+							  AND air.DelFlag			= 0)))	) sub
     /*******************************************************************  
         The ORDER BY below looks at max avg_frag and then alternates the 
         next day with indexes with max page splits.  
@@ -219,9 +220,9 @@ BEGIN
 IF @ShowProcessSteps = 1 
     SELECT '#work_to_do, Line 220',* FROM #work_to_do
 
-/**********************************************************************
-Save all BadPageSplit history per day
-***********************************************************************/
+/****************************************************************************************************************************
+Save all BadPageSplit history per day; this is for analysis only; has nothing to do with the fillfactor logic in this script
+*****************************************************************************************************************************/
 INSERT [Admin].BadPageSplits
 	(CreateDate,TableName,IndexName,PartitionNum,Current_Fragmentation,BadPageSplits,[FillFactor],[Object_ID],Index_ID,Page_Count,Record_Count
 	, UserSeeks,UserScans,UserLookups,UserUpdates,LastUserUpdate)
@@ -247,8 +248,7 @@ INSERT [Admin].BadPageSplits
 		   a.user_lookups,
 		   a.user_updates,
 		   a.last_user_update
-		
- --  --get data for all tables/indexes
+		--  --get data for all tables/indexes
         --  SAMPLED gives same avg fragmentation as DETAILED and is much faster
         FROM sys.dm_db_index_physical_stats (DB_ID(@Database),NULL,NULL,NULL,'SAMPLED') ps 
         JOIN sys.dm_db_index_operational_stats(DB_ID(@Database),NULL,NULL,NULL) ios
@@ -310,7 +310,7 @@ SET @command = N'
     
 
 /************************************************************************
-    Go back and find oldest index (>@RedoPeriod) with @FixFillFactor 
+    Go back and find oldest index (>@RedoPeriod) with @FixFillFactor set
         and add it to #work_to_do 
         (to keep index fill factors from getting "stale").
 ***********************************************************************/
@@ -353,7 +353,7 @@ SET @command = N'
         IF @ShowProcessSteps = 1 SELECT '#Temp2',* FROM #Temp2
 
 /**********************************************************************
-    Go back and recalculate FillFactor for oldest Table/Index 
+    Go back and reset FillFactor for oldest Table/Index 
         in Admin.AgentIndexRebuilds
 ***********************************************************************/
         IF @RowCount = 1         
@@ -376,10 +376,9 @@ SET @command = N'
                         FixFillFactor = NULL          --reset FixFillFactor so that 
                                                       --  regression can start
 
-/**********************************************************************
-    Reset fixfillfactor from previous passes (need to reset it for 
-    all rows with Object_ID, Index_ID, & PartitionNum
-***********************************************************************/
+/*******************************************************************************
+    Set DelFlag (soft delete) for all existing rows for this table/index
+********************************************************************************/
             UPDATE r
                 SET DelFlag = 1
                 FROM [Admin].AgentIndexRebuilds r
@@ -431,9 +430,8 @@ SET @command = N'
 														  ORDER BY CreateDate DESC, ID DESC) RowNumber
 								 FROM [Admin].AgentIndexRebuilds r 
 								 WHERE r.DBName  = @Database
-								   AND r.DelFlag = 0
-								 /*GROUP BY TableName,IndexName,PartitionNum*/) sub
-							WHERE sub.RowNumber = 1 ) sub2
+								   AND r.DelFlag = 0 ) sub
+							WHERE sub.RowNumber  = 1 ) sub2
                   ON  sub2.TableName    = OBJECT_NAME(w.ObjectID)
                   AND sub2.IndexName    = i.[name] 
                   AND sub2.PartitionNum = w.partitionnum
@@ -455,9 +453,8 @@ SET @command = N'
 														  ORDER BY CreateDate DESC, ID DESC) RowNumber
 								 FROM [Admin].AgentIndexRebuilds r 
 								 WHERE r.DBName  = @Database
-								   AND r.DelFlag = 0
-								 GROUP BY TableName,IndexName,PartitionNum) sub
-							WHERE sub.RowNumber = 1 ) sub2
+								   AND r.DelFlag = 0 ) sub
+							WHERE sub.RowNumber  = 1 ) sub2
                   ON  sub2.TableName    = OBJECT_NAME(w.ObjectID)
                   AND sub2.IndexName    = i.[name] 
                   AND sub2.PartitionNum = w.partitionnum
@@ -487,7 +484,8 @@ SET @command = N'
                 WHERE o.object_id = @objectid     
 
 /**********************************************************************
-    New logic:  Check last 6 rebuilds in history table and select
+    Logic to fix fillfactor:  
+		 Check last 6 rebuilds in history table and select
          fillfactor where the last 2 rebuilds had a larger fragmentation.
 
          This was asked for at SQL Saturday Baton Rouge as a means for
@@ -496,7 +494,7 @@ SET @command = N'
          Also added logic to only perturb fillfactors on weekdays.
 ***********************************************************************/
 
-        --check index rebuild table for six entries
+        --check index rebuild table for six entries (this logic sets FixFillFactor when appropriate)
         IF @WorkDay = 1
           BEGIN    
             IF OBJECT_ID(N'tempdb..#Temp4') IS NOT NULL DROP TABLE #Temp4
@@ -545,8 +543,8 @@ SET @command = N'
                       AND Index_ID      = @indexid
                       AND PartitionNum  = @partitionnum
                       AND DelFlag       = 0
-			  END	--Begin at Line 539
-          END		--Begin at Line 501
+			  END	--Begin at Line 540
+          END		--Begin at Line 502
 
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
@@ -565,16 +563,6 @@ SET @command = N'
             IF @ShowProcessSteps = 1 
 				SELECT 'check for partitioned',@PartitionFlag [@PartitionFlag], @OldFillFactor [@OldFillFactor]
 
---            SET @FixFillFactor = 
---                (SELECT FixFillFactor 
---                   FROM [Admin].[AgentIndexRebuilds] air1
---                   WHERE air1.DBName = @Database
---                     AND air1.ID =  (SELECT MAX(ID)    
---                                       FROM [Admin].[AgentIndexRebuilds] air2
---                                       WHERE air2.DBName       = @Database 
---                                         AND air2.[Object_ID]  = @objectid
---                                         AND air2.Index_ID     = @indexid
---                                         AND air2.PartitionNum = @partitionnum))    
 
 
 /**********************************************************************
@@ -587,7 +575,7 @@ SET @command = N'
      is never less than 70%.  This is an arbitrary number I set and 
      can be changed if required.
 ***********************************************************************/
-            IF @FixFillFactor IS NULL AND @WorkDay = 1
+            IF @FixFillFactor IS NULL AND @WorkDay = 1		--(i.e., fill factor has not be set and is a workday)
               BEGIN
                 SET @FillFactor = CASE  WHEN @RowCount = 1 
                                             THEN @FillFactor  --to catch redo index
@@ -601,7 +589,7 @@ SET @command = N'
                                              @LagDate IS NULL 
                                              THEN 100
                                         WHEN @indexid = 1 AND 
-                                             @LagDate <30 
+                                             @LagDate <90 
                                              THEN @FillFactor -1
                                         --nonclustered indexes, 
                                         --  decrement fill factor 
@@ -694,7 +682,7 @@ SET @command = N'
 						IF @Retry = 0
 							SELECT 'Retry errored out for', @Command
 					END CATCH
-				END		--Begin at Line 685
+				END		--Begin at Line 686
 
                 --insert results into history table (AgentIndexRebuilds)
         IF @PartitionFlag = 0 AND @WorkDay = 1
@@ -771,14 +759,14 @@ SET @command = N'
                           AND w.objectid           = @objectid
                           AND w.partitionnum       = @partitionnum
                           AND ps.index_level = 0;   
-				END		--BEGIN at Line 738
-		  END	--Begin at 701		
+				END		--BEGIN at Line 739
+		  END	--Begin at 702		
 
              SET @PartitionFlag = 0;    
              FETCH NEXT FROM [workcursor] 
                  INTO @objectid, @indexid, @partitionnum, @frag
                 ,@FillFactor,@objectname,@indexname,@LagDate,@RowCount;    
-      END		--Begin at line 475  
+      END		--Begin at line 476  
           -- Close and deallocate the cursor. 
             CLOSE [workcursor];     
             DEALLOCATE [workcursor];    
