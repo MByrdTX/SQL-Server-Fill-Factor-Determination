@@ -14,7 +14,6 @@ MByrdTX.  Look for it there in the near future.
 Also in this folder are two word documents that have been published at SQLServerCentral.com.  The 
 script attached to Part1 has a typo in it and has since evolved as described above.
 
-Also in this folder is a PowerPoint presentation I gave on this topic at the local Austin SQL Server User?s 
-Group (CACTUSS). This session was taped and can be found on [usergroup.tv](http://usergroup.tv/videos/a-self-tuning-fill-factor-technique-for-sql-server)
+Also in this folder is a GroupBy PowerPoint presentation I gave on May 13.  A video recording should be available from GroupBy.com.
 
 
