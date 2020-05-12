@@ -1,4 +1,4 @@
---© 2019 | ByrdNest Consulting
+--© 2020 | ByrdNest Consulting
 
 -- ensure a USE <databasename> statement has been executed first. 
 --USE <Database>    
@@ -51,7 +51,7 @@ code setup for Always On Primary Node; comment out next 4 statements
 --  SET @preferredReplica 
 --    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
 --  IF (@preferredReplica = 0)
-    BEGIN
+    BEGIN		--Dynamic SQL because of SS restriction on CREATE TABlE being first statement in query batch
         --define Admin schema if not exists
         IF NOT EXISTS (SELECT 1 from sys.schemas WHERE [name] = 'Admin')
             EXEC sp_executesql N'CREATE SCHEMA [Admin] AUTHORIZATION [dbo]'    
@@ -151,5 +151,3 @@ GO
 
 ALTER TABLE Admin.BadPageSplits ADD  DEFAULT (getdate()) FOR CREATEDATE
 GO
-
-
