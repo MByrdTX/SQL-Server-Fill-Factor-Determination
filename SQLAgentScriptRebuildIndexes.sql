@@ -52,7 +52,7 @@ GO
     TO THE IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A
     PARTICULAR PURPOSE. 
 
-    Created         By               Comments
+    Created         By                Comments
     20190424        Mike Byrd        Created
     20190513        Mike Byrd        Added additional data columns to 
                                          AgentIndexRebuilds table
@@ -72,7 +72,7 @@ DECLARE @RedoPeriod          INT     = 90;    --Days
 DECLARE @TopWorkCount        INT     = 20;    --Specify how large result 
 
 DECLARE @ShowDynamicSQLCommands bit = 1; -- show dynamic SQL commands before they run
-DECLARE @ShowProcessSteps bit = 0; -- show where we are in the code
+DECLARE @ShowProcessSteps bit = 1; -- show where we are in the code
                                              --     set for Work_to_Do
 --  --get current database name
 DECLARE @Database            SYSNAME = (SELECT DB_NAME());
@@ -84,10 +84,10 @@ DECLARE @Retry				 INT = 10;
 code setup for Always On Primary Node; comment out next 4 statements
       if not an Always On Node
 **********************************************************************/
---  DECLARE @preferredReplica INT
---  SET @preferredReplica 
---    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
---  IF (@preferredReplica = 0) 
+  DECLARE @preferredReplica INT
+  SET @preferredReplica 
+    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
+  IF (@preferredReplica = 0) 
 BEGIN
     DECLARE @Date                                DATETIME = GETDATE();    
     DECLARE @RowCount                            INT = 0;    
@@ -198,7 +198,7 @@ BEGIN
           ON tab.alloc_unit_id = au.allocation_unit_id
         WHERE i.index_id           > 0
           AND o.[type]             = 'U'
-          AND ps.avg_fragmentation_in_percent > 1.20   --this is rebuild condition
+          AND (ps.avg_fragmentation_in_percent > 1.20 OR tab.split_count >= 5)   --this is rebuild condition
           AND ps.index_level       = 0
 		  -- logic added to still defrag on weekends and tweak fillfactor on weekdays
 		  AND (@WorkDay = 0 OR (@WorkDay = 1  AND NOT EXISTS (SELECT 1 FROM [Admin].AgentIndexRebuilds air		-- logic to keep from getting fillfactor already set
@@ -215,14 +215,14 @@ BEGIN
     WHERE sub.RowNumber = 1
     ORDER BY CASE WHEN DAY(getdate()) % 2 = 1 
                       THEN sub.frag
-                  ELSE sub.BadPageSplit/sub.page_count END DESC   
+                  ELSE sub.BadPageSplit/*/sub.page_count*/ END DESC   
 
 IF @ShowProcessSteps = 1 
     SELECT '#work_to_do, Line 220',* FROM #work_to_do
 
-/****************************************************************************************************************************
-Save all BadPageSplit history per day; this is for analysis only; has nothing to do with the fillfactor logic in this script
-*****************************************************************************************************************************/
+/**********************************************************************
+Save all BadPageSplit history per day
+***********************************************************************/
 INSERT [Admin].BadPageSplits
 	(CreateDate,TableName,IndexName,PartitionNum,Current_Fragmentation,BadPageSplits,[FillFactor],[Object_ID],Index_ID,Page_Count,Record_Count
 	, UserSeeks,UserScans,UserLookups,UserUpdates,LastUserUpdate)
@@ -248,7 +248,8 @@ INSERT [Admin].BadPageSplits
 		   a.user_lookups,
 		   a.user_updates,
 		   a.last_user_update
-		--  --get data for all tables/indexes
+		
+ --  --get data for all tables/indexes
         --  SAMPLED gives same avg fragmentation as DETAILED and is much faster
         FROM sys.dm_db_index_physical_stats (DB_ID(@Database),NULL,NULL,NULL,'SAMPLED') ps 
         JOIN sys.dm_db_index_operational_stats(DB_ID(@Database),NULL,NULL,NULL) ios
@@ -310,7 +311,7 @@ SET @command = N'
     
 
 /************************************************************************
-    Go back and find oldest index (>@RedoPeriod) with @FixFillFactor set
+    Go back and find oldest index (>@RedoPeriod) with @FixFillFactor 
         and add it to #work_to_do 
         (to keep index fill factors from getting "stale").
 ***********************************************************************/
@@ -353,7 +354,7 @@ SET @command = N'
         IF @ShowProcessSteps = 1 SELECT '#Temp2',* FROM #Temp2
 
 /**********************************************************************
-    Go back and reset FillFactor for oldest Table/Index 
+    Go back and recalculate FillFactor for oldest Table/Index 
         in Admin.AgentIndexRebuilds
 ***********************************************************************/
         IF @RowCount = 1         
@@ -376,9 +377,10 @@ SET @command = N'
                         FixFillFactor = NULL          --reset FixFillFactor so that 
                                                       --  regression can start
 
-/*******************************************************************************
-    Set DelFlag (soft delete) for all existing rows for this table/index
-********************************************************************************/
+/**********************************************************************
+    Reset fixfillfactor from previous passes (need to reset it for 
+    all rows with Object_ID, Index_ID, & PartitionNum
+***********************************************************************/
             UPDATE r
                 SET DelFlag = 1
                 FROM [Admin].AgentIndexRebuilds r
@@ -430,8 +432,9 @@ SET @command = N'
 														  ORDER BY CreateDate DESC, ID DESC) RowNumber
 								 FROM [Admin].AgentIndexRebuilds r 
 								 WHERE r.DBName  = @Database
-								   AND r.DelFlag = 0 ) sub
-							WHERE sub.RowNumber  = 1 ) sub2
+								   AND r.DelFlag = 0
+								 /*GROUP BY TableName,IndexName,PartitionNum*/) sub
+							WHERE sub.RowNumber = 1 ) sub2
                   ON  sub2.TableName    = OBJECT_NAME(w.ObjectID)
                   AND sub2.IndexName    = i.[name] 
                   AND sub2.PartitionNum = w.partitionnum
@@ -453,8 +456,9 @@ SET @command = N'
 														  ORDER BY CreateDate DESC, ID DESC) RowNumber
 								 FROM [Admin].AgentIndexRebuilds r 
 								 WHERE r.DBName  = @Database
-								   AND r.DelFlag = 0 ) sub
-							WHERE sub.RowNumber  = 1 ) sub2
+								   AND r.DelFlag = 0
+								 /*GROUP BY TableName,IndexName,PartitionNum*/) sub
+							WHERE sub.RowNumber = 1 ) sub2
                   ON  sub2.TableName    = OBJECT_NAME(w.ObjectID)
                   AND sub2.IndexName    = i.[name] 
                   AND sub2.PartitionNum = w.partitionnum
@@ -484,8 +488,7 @@ SET @command = N'
                 WHERE o.object_id = @objectid     
 
 /**********************************************************************
-    Logic to fix fillfactor:  
-		 Check last 6 rebuilds in history table and select
+    New logic:  Check last 6 rebuilds in history table and select
          fillfactor where the last 2 rebuilds had a larger fragmentation.
 
          This was asked for at SQL Saturday Baton Rouge as a means for
@@ -563,6 +566,16 @@ SET @command = N'
             IF @ShowProcessSteps = 1 
 				SELECT 'check for partitioned',@PartitionFlag [@PartitionFlag], @OldFillFactor [@OldFillFactor]
 
+--            SET @FixFillFactor = 
+--                (SELECT FixFillFactor 
+--                   FROM [Admin].[AgentIndexRebuilds] air1
+--                   WHERE air1.DBName = @Database
+--                     AND air1.ID =  (SELECT MAX(ID)    
+--                                       FROM [Admin].[AgentIndexRebuilds] air2
+--                                       WHERE air2.DBName       = @Database 
+--                                         AND air2.[Object_ID]  = @objectid
+--                                         AND air2.Index_ID     = @indexid
+--                                         AND air2.PartitionNum = @partitionnum))    
 
 
 /**********************************************************************
@@ -575,7 +588,7 @@ SET @command = N'
      is never less than 70%.  This is an arbitrary number I set and 
      can be changed if required.
 ***********************************************************************/
-            IF @FixFillFactor IS NULL AND @WorkDay = 1		--(i.e., fill factor has not be set and is a workday)
+            IF @FixFillFactor IS NULL AND @WorkDay = 1
               BEGIN
                 SET @FillFactor = CASE  WHEN @RowCount = 1 
                                             THEN @FillFactor  --to catch redo index
@@ -589,7 +602,7 @@ SET @command = N'
                                              @LagDate IS NULL 
                                              THEN 100
                                         WHEN @indexid = 1 AND 
-                                             @LagDate <90 
+                                             @LagDate <30 
                                              THEN @FillFactor -1
                                         --nonclustered indexes, 
                                         --  decrement fill factor 

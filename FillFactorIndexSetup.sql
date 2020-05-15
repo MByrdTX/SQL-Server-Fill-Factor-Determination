@@ -51,7 +51,7 @@ code setup for Always On Primary Node; comment out next 4 statements
 --  SET @preferredReplica 
 --    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
 --  IF (@preferredReplica = 0)
-    BEGIN		--Dynamic SQL because of SS restriction on CREATE TABlE being first statement in query batch
+    BEGIN
         --define Admin schema if not exists
         IF NOT EXISTS (SELECT 1 from sys.schemas WHERE [name] = 'Admin')
             EXEC sp_executesql N'CREATE SCHEMA [Admin] AUTHORIZATION [dbo]'    
@@ -120,6 +120,12 @@ ON SERVER
 STATE=START;
 GO
 
+/*****************************************************************************
+
+	Table Admin.BadPageSplits (below) used for data collection/analysis only.
+	It is not used to determine or set fill factor (at this time).
+
+******************************************************************************/
 
 USE ROICore
 GO
@@ -130,7 +136,7 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-CREATE TABLE Admin.BadPageSplits(
+CREATE TABLE [Admin].BadPageSplits(
 	ID INT IDENTITY(1,1) NOT NULL,
 	CREATEDATE datetime NOT NULL,
 	TableName sysname NOT NULL,
@@ -149,5 +155,7 @@ CREATE TABLE Admin.BadPageSplits(
 ) 
 GO
 
-ALTER TABLE Admin.BadPageSplits ADD  DEFAULT (getdate()) FOR CREATEDATE
+ALTER TABLE [Admin].BadPageSplits ADD  DEFAULT (getdate()) FOR CREATEDATE
 GO
+
+
