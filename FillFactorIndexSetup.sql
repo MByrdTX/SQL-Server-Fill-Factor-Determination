@@ -149,6 +149,11 @@ CREATE TABLE [Admin].BadPageSplits(
 	Index_ID int NULL,
 	Page_Count bigint NULL,
 	Record_Count bigint NULL,
+	UserSeeks bigint NULL,
+	UserScans bigint NULL,
+	UserLookups bigint NULL,
+	UserUpdates bigint NULL,
+	LastUserUpdate datetime NULL,
  CONSTRAINT PK_BadPageSplits PRIMARY KEY 
 	(ID ASC)
 	WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, DATA_COMPRESSION = ROW) 
