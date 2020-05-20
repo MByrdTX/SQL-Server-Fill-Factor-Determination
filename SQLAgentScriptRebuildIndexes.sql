@@ -348,6 +348,10 @@ SET @command = N'
                                    WHERE p.object_id = r.Object_ID
                                      AND p.index_id  = r.Index_ID
                                      AND p.partition_number > 1)
+		  AND NOT EXISTS (SELECT 1	FROM #work_to_do t
+                                    WHERE t.TableName		= r.TableName
+                                      AND t.IndexName       = r.IndexName
+                                      AND t.PartitionNum    = r.PartitionNum)
         ORDER BY ID DESC, CREATEDATE DESC
         SET @RowCount = @@ROWCOUNT    
 
@@ -410,7 +414,7 @@ SET @command = N'
                     FROM #Temp2    
             IF @ShowProcessSteps = 1 
                 SELECT 'New row in #work_to_do',* FROM #work_to_do
-          END	--Begin at Line 360
+          END	--Begin at Line 364
 
 
     -- Declare the cursor for the list of indexes to be processed. 
@@ -546,8 +550,8 @@ SET @command = N'
                       AND Index_ID      = @indexid
                       AND PartitionNum  = @partitionnum
                       AND DelFlag       = 0
-			  END	--Begin at Line 540
-          END		--Begin at Line 502
+			  END	--Begin at Line 544
+          END		--Begin at Line 506
 
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
@@ -635,8 +639,8 @@ SET @command = N'
                           AND Index_ID     = @indexid
                           AND PartitionNum = @partitionnum
 						  AND DelFlag      = 0
-                  END		--Begin at Line 627
-                END		--Begin at Line 591
+                  END		--Begin at Line 632
+                END		--Begin at Line 596
             ELSE
                 SET @FillFactor = CASE WHEN @FixFillFactor IS NOT NULL
                                        THEN  @FixFillFactor
@@ -695,7 +699,7 @@ SET @command = N'
 						IF @Retry = 0
 							SELECT 'Retry errored out for', @Command
 					END CATCH
-				END		--Begin at Line 686
+				END		--Begin at Line 690
 
                 --insert results into history table (AgentIndexRebuilds)
         IF @PartitionFlag = 0 AND @WorkDay = 1
@@ -772,14 +776,14 @@ SET @command = N'
                           AND w.objectid           = @objectid
                           AND w.partitionnum       = @partitionnum
                           AND ps.index_level = 0;   
-				END		--BEGIN at Line 739
-		  END	--Begin at 702		
+				END		--BEGIN at Line 743
+		  END	--Begin at 706		
 
              SET @PartitionFlag = 0;    
              FETCH NEXT FROM [workcursor] 
                  INTO @objectid, @indexid, @partitionnum, @frag
                 ,@FillFactor,@objectname,@indexname,@LagDate,@RowCount;    
-      END		--Begin at line 476  
+      END		--Begin at line 480  
           -- Close and deallocate the cursor. 
             CLOSE [workcursor];     
             DEALLOCATE [workcursor];    
@@ -791,7 +795,7 @@ SET @command = N'
                 DROP TABLE #Temp2;   
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL 
                 DROP TABLE #Temp3;  
-      END --Begin at Line 417  
+      END --Begin at Line 422  
     IF OBJECT_ID(N'tempdb..#work_to_do') IS NOT NULL DROP TABLE #work_to_do;    
     IF @ShowProcessSteps = 1 
 		PRINT 'cleanup';
