@@ -71,8 +71,8 @@ GO
 DECLARE @RedoPeriod          INT     = 90;    --Days
 DECLARE @TopWorkCount        INT     = 20;    --Specify how large result 
 
-DECLARE @ShowDynamicSQLCommands bit = 1; -- show dynamic SQL commands before they run
-DECLARE @ShowProcessSteps bit = 1; -- show where we are in the code
+DECLARE @ShowDynamicSQLCommands bit = 0; -- show dynamic SQL commands before they run
+DECLARE @ShowProcessSteps bit = 0; -- show where we are in the code
                                              --     set for Work_to_Do
 --  --get current database name
 DECLARE @Database            SYSNAME = (SELECT DB_NAME());
@@ -414,7 +414,7 @@ SET @command = N'
                     FROM #Temp2    
             IF @ShowProcessSteps = 1 
                 SELECT 'New row in #work_to_do',* FROM #work_to_do
-          END	--Begin at Line 364
+          END	--Begin at Line 365
 
 
     -- Declare the cursor for the list of indexes to be processed. 
@@ -713,6 +713,7 @@ SET @command = N'
                     , [Object_ID], Index_ID
                     , page_count, record_count, forwarded_record_count
                     , New_forwarded_record_count, LagDays,FixFillFactor,DelFlag)
+--					OUTPUT INSERTED.ID, INSERTED.CreateDate,INSERTED.TableName,INSERTED.IndexName
                     SELECT @DATE,@Database,@schemaname,@objectname
                           ,@indexname,@partitionnum,@frag
                           , ps.avg_fragmentation_in_percent
@@ -738,6 +739,7 @@ SET @command = N'
                         WHERE w.indexid            = @indexid
                           AND w.objectid           = @objectid
                           AND w.partitionnum       = @partitionnum
+						  AND ps.alloc_unit_type_desc	= 'IN_ROW_DATA'
                           AND ps.index_level = 0;   
 			IF @ShowProcessSteps = 1
 				BEGIN
@@ -750,7 +752,7 @@ SET @command = N'
                              ,'SAMPLED');
 					SELECT 'sys.dm_db_index_operational_stats',* FROM sys.dm_db_index_operational_stats
                              (DB_ID(@Database),@objectid,@indexid,@partitionnum);
-                    SELECT @DATE,@Database,@schemaname,@objectname
+                    SELECT 'InsertInto[Admin].AgentIndexRebuilds',@DATE,@Database,@schemaname,@objectname
                           ,@indexname,@partitionnum,@frag
                           , ps.avg_fragmentation_in_percent
                           ,w.PAGE_SPLIT_FOR_INDEX,w.BadPageSplit,ios.LEAF_ALLOCATION_COUNT
@@ -775,8 +777,9 @@ SET @command = N'
                         WHERE w.indexid            = @indexid
                           AND w.objectid           = @objectid
                           AND w.partitionnum       = @partitionnum
+						  AND ps.alloc_unit_type_desc	= 'IN_ROW_DATA'
                           AND ps.index_level = 0;   
-				END		--BEGIN at Line 743
+				END		--BEGIN at Line 745
 		  END	--Begin at 706		
 
              SET @PartitionFlag = 0;    
