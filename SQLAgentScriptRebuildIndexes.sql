@@ -71,8 +71,8 @@ GO
 DECLARE @RedoPeriod          INT     = 90;    --Days
 DECLARE @TopWorkCount        INT     = 20;    --Specify how large result 
 
-DECLARE @ShowDynamicSQLCommands bit = 0; -- show dynamic SQL commands before they run
-DECLARE @ShowProcessSteps bit = 0; -- show where we are in the code
+DECLARE @ShowDynamicSQLCommands bit = 1; -- show dynamic SQL commands before they run
+DECLARE @ShowProcessSteps bit = 1; -- show where we are in the code
                                              --     set for Work_to_Do
 --  --get current database name
 DECLARE @Database            SYSNAME = (SELECT DB_NAME());
@@ -127,10 +127,16 @@ BEGIN
     DECLARE @MinFragID                           INT;
     DECLARE @MinFragBadPageSplits                INT;
     DECLARE @NewFillFactor                       INT;
+	DECLARE @Error								 INT = 0;
+	DECLARE @ErrorMessage						 NVARCHAR(4000);
+	DECLARE @ErrorSeverity						 INT;
+	DECLARE @ErrorState							 INT, @ErrorLine		INT;
+	DECLARE @Message							 NVARCHAR(4000) = '';
     SET NOCOUNT ON;     
-    SET QUOTED_IDENTIFIER ON;                --needed for XML ops in query below
+    SET QUOTED_IDENTIFIER ON;					--needed for XML ops in query below
  
-    IF LOWER(@@VERSION) LIKE '%enterprise edition%' 
+
+   IF LOWER(@@VERSION) LIKE '%enterprise edition%' 
         or LOWER(@@VERSION) LIKE '%developer edition%' 
             SET @Online_On_String = N'ONLINE = ON,'
  
@@ -478,6 +484,7 @@ SET @command = N'
 
         WHILE @@FETCH_STATUS = 0 
           BEGIN 
+		 	SET @Retry = 6
             IF @ShowProcessSteps = 1 
                 SELECT 'WorkCursor parameters',@objectid [@objectid], @indexid [@indexid], @partitionnum [@partitionnum]
 						, @frag [@frag], @FillFactor [@FillFactor], @objectname [@objectname]
@@ -685,19 +692,21 @@ SET @command = N'
             IF @ShowDynamicSQLCommands = 1 PRINT @command
 
 			--Try Catch logic added because of errors caused by other on-going processes
-			SET @Retry = 6
 			WHILE (@Retry > 0)
 				BEGIN
 					BEGIN TRY
 						PRINT @Retry;
 						EXEC sys.sp_executesql @command
-						WAITFOR DELAY '00:00:10.000'	--delay 10 seconds for retry
 						SET @Retry = 0;
 					END TRY
 					BEGIN CATCH
+						SELECT @Error = @@ERROR,@ObjectName = Object_Name(@@ProcID),@ErrorMessage = ERROR_MESSAGE(),@ErrorSeverity	= ERROR_SEVERITY(),@ErrorState = ERROR_STATE(),@ErrorLine = ERROR_LINE(); 
+						SET @Message = N'ErrorMsg: ' + @ObjectName + N', Line ' + CONVERT(NVARCHAR(20),@ErrorLine) + N', ' + @ErrorMessage;
+						PRINT @Message;
+						WAITFOR DELAY '00:00:10.000';	--delay 10 seconds for retry
 						SET @Retry = @Retry - 1;
 						IF @Retry = 0
-							SELECT 'Retry errored out for', @Command
+							SELECT 'Retry errored out for', @Command;
 					END CATCH
 				END		--Begin at Line 690
 
@@ -739,7 +748,7 @@ SET @command = N'
                         WHERE w.indexid            = @indexid
                           AND w.objectid           = @objectid
                           AND w.partitionnum       = @partitionnum
-						  AND ps.alloc_unit_type_desc	= 'IN_ROW_DATA'
+	          AND ps.alloc_unit_type_desc	= 'IN_ROW_DATA'
                           AND ps.index_level = 0;   
 			IF @ShowProcessSteps = 1
 				BEGIN
@@ -777,7 +786,7 @@ SET @command = N'
                         WHERE w.indexid            = @indexid
                           AND w.objectid           = @objectid
                           AND w.partitionnum       = @partitionnum
-						  AND ps.alloc_unit_type_desc	= 'IN_ROW_DATA'
+	          AND ps.alloc_unit_type_desc	= 'IN_ROW_DATA'
                           AND ps.index_level = 0;   
 				END		--BEGIN at Line 745
 		  END	--Begin at 706		
