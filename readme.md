@@ -27,7 +27,16 @@ Wish List for Improvements:
 7.  Need better way of monitoring table Admin.AgentIndexRebuilds -- both manually and also self reviewing.  Any volunteers out there to implement a dash board?
 8.  Compare index growth vs fill factor tweaks.
 
-I (Mike Byrd) am still monitoring and analyzing the code and results from Admin.AgentIndexRebuilds and Admin.BadPageSplits.  This resulted in a minor tweak to the SQL Agent code (SQLAgentScriptRebuildIndexes.sql) today.
+20200616:
+	This started out to be a proof of concept trying to determine if we could
+	perturb fill factor from a history table to find an "optimum" fill factor
+	for each index.  After 90 days, I saw a 30% drop in overall wait times for
+	a very active online transaction database.  I've continued to "tweak" this
+	script as I collect data.  This originally started out as a defragmentation
+	script, then evolved into a fill factor determination script, and finally
+	has run full circle to both a fill factor and defragmentation script where
+	the major defragmentation occurs on the weekend (Saturday and Sunday).  
+	This script will not tweak fill factor for heaps and partitioned indexes, but
+	does defragment partitioned indexes.  
 
-
-
+Also today revised logic (commented out some lines) to ensure first pass at an index is always with fill factor = 100.
