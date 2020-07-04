@@ -354,7 +354,7 @@ SET @command = N'
           AND r.FixFillFactor IS NOT NULL		--don't get indexes still being perturbed
           AND r.DelFlag = 0
           AND @WorkDay  = 1
-          AND NOT EXISTS (SELECT 1  FROM [Admin].AgentIndexRebuilds r2
+          AND NOT EXISTS (SELECT 1  FROM [Admin].AgentIndexRebuilds r2				--relook at this logic.  
                                     WHERE r2.DBName          = @Database
                                       AND r2.[Object_ID]     = r.[Object_ID]
                                       AND r2.Index_ID        = r.Index_ID
@@ -723,19 +723,18 @@ SET @command = N'
             INSERT [Admin].AgentIndexRebuilds (CREATEDATE, DBName
                     , SchemaName, TableName, IndexName, PartitionNum
                     , Current_Fragmentation, New_fragmentation
-                    , PageSplitForIndex, BadPageSplits, New_PageSplitForIndex
+                    , PageSplitForIndex, BadPageSplits/*, New_PageSplitForIndex*/
                     , PageAllocationCausedByPageSplit
-                    , New_PageAllocationCausedByPageSplit, [FillFactor]
-                    , [Object_ID], Index_ID
-                    , page_count, record_count, forwarded_record_count
-                    , New_forwarded_record_count, LagDays,FixFillFactor,DelFlag)
+                    /*, New_PageAllocationCausedByPageSplit*/, [FillFactor], [Object_ID]
+					, Index_ID, page_count, record_count
+					, forwarded_record_count, New_forwarded_record_count
+					, LagDays,FixFillFactor,DelFlag)
 --					OUTPUT INSERTED.ID, INSERTED.CreateDate,INSERTED.TableName,INSERTED.IndexName
-                    SELECT @DATE,@Database,@schemaname,@objectname
-                          ,@indexname,@partitionnum,@frag
-                          , ps.avg_fragmentation_in_percent
-                          ,w.PAGE_SPLIT_FOR_INDEX,w.BadPageSplit,ios.LEAF_ALLOCATION_COUNT
+                    SELECT @DATE,@Database,@schemaname,@objectname,@indexname,@partitionnum
+					      ,@frag, ps.avg_fragmentation_in_percent
+                          ,w.PAGE_SPLIT_FOR_INDEX,w.BadPageSplit/*,ios.LEAF_ALLOCATION_COUNT*/
                           ,w.PAGE_ALLOCATION_CAUSED_BY_PAGESPLIT
-                        ,ios.NONLEAF_ALLOCATION_COUNT,@FillFactor,w.objectid
+                        /*,ios.NONLEAF_ALLOCATION_COUNT*/,@FillFactor,w.objectid
                         ,w.indexid,w.page_count,w.record_count
                         ,w.forwarded_record_count,ps.forwarded_record_count
                         ,@LagDate,@FixFillFactor,0
@@ -747,34 +746,34 @@ SET @command = N'
                           AND ps.object_id        = w.objectid
                           AND ps.partition_number = w.partitionnum
                           AND ps.index_level      = 0
-                        JOIN sys.dm_db_index_operational_stats
-                             (DB_ID(@Database),@objectid,@indexid,@partitionnum) ios
-                          ON  ios.index_id         = w.indexid
-                          AND ios.object_id        = w.objectid
-                          AND ios.partition_number = w.partitionnum
-                        WHERE w.indexid            = @indexid
-                          AND w.objectid           = @objectid
-                          AND w.partitionnum       = @partitionnum
-	          AND ps.alloc_unit_type_desc	= 'IN_ROW_DATA'
-                          AND ps.index_level = 0;   
+--                        JOIN sys.dm_db_index_operational_stats
+--                             (DB_ID(@Database),@objectid,@indexid,@partitionnum) ios
+--                          ON  ios.index_id         = w.indexid
+--                          AND ios.object_id        = w.objectid
+--                          AND ios.partition_number = w.partitionnum
+                        WHERE w.indexid                 = @indexid
+                          AND w.objectid                = @objectid
+                          AND w.partitionnum            = @partitionnum
+	                      AND ps.alloc_unit_type_desc	= 'IN_ROW_DATA'
+                          AND ps.index_level            = 0;   
 			IF @ShowProcessSteps = 1
 				BEGIN
 					SELECT DATEDIFF(ss,@StartTime,GETDATE()) TimeForThisIndexRebuild;
---					SELECT '#work_to_do',* FROM #work_to_do w
---                        WHERE w.indexid            = @indexid
---                          AND w.objectid           = @objectid
---                          AND w.partitionnum       = @partitionnum;
---					SELECT 'sys.dm_db_index_physical_stats',* FROM sys.dm_db_index_physical_stats 
---                             (DB_ID(@Database),@objectid,@indexid,@partitionnum
---                             ,'SAMPLED');
---					SELECT 'sys.dm_db_index_operational_stats',* FROM sys.dm_db_index_operational_stats
---                             (DB_ID(@Database),@objectid,@indexid,@partitionnum);
+					SELECT '#work_to_do',* FROM #work_to_do w
+                        WHERE w.indexid            = @indexid
+                          AND w.objectid           = @objectid
+                          AND w.partitionnum       = @partitionnum;
+					SELECT 'sys.dm_db_index_physical_stats',* FROM sys.dm_db_index_physical_stats 
+                             (DB_ID(@Database),@objectid,@indexid,@partitionnum
+                             ,'SAMPLED');
+					SELECT 'sys.dm_db_index_operational_stats',* FROM sys.dm_db_index_operational_stats
+                             (DB_ID(@Database),@objectid,@indexid,@partitionnum);
                     SELECT 'InsertInto[Admin].AgentIndexRebuilds',@DATE,@Database,@schemaname,@objectname
                           ,@indexname,@partitionnum,@frag
                           , ps.avg_fragmentation_in_percent
-                          ,w.PAGE_SPLIT_FOR_INDEX,w.BadPageSplit,ios.LEAF_ALLOCATION_COUNT
+                          ,w.PAGE_SPLIT_FOR_INDEX,w.BadPageSplit/*,ios.LEAF_ALLOCATION_COUNT*/
                           ,w.PAGE_ALLOCATION_CAUSED_BY_PAGESPLIT
-                        ,ios.NONLEAF_ALLOCATION_COUNT,@FillFactor,w.objectid
+                        /*,ios.NONLEAF_ALLOCATION_COUNT*/,@FillFactor,w.objectid
                         ,w.indexid,w.page_count,w.record_count
                         ,w.forwarded_record_count,ps.forwarded_record_count
                         ,@LagDate,@FixFillFactor,0
@@ -786,11 +785,11 @@ SET @command = N'
                           AND ps.object_id        = w.objectid
                           AND ps.partition_number = w.partitionnum
                           AND ps.index_level      = 0
-                        JOIN sys.dm_db_index_operational_stats
-                             (DB_ID(@Database),@objectid,@indexid,@partitionnum) ios
-                          ON  ios.index_id         = w.indexid
-                          AND ios.object_id        = w.objectid
-                          AND ios.partition_number = w.partitionnum
+ --                       JOIN sys.dm_db_index_operational_stats
+ --                            (DB_ID(@Database),@objectid,@indexid,@partitionnum) ios
+ --                         ON  ios.index_id         = w.indexid
+ --                         AND ios.object_id        = w.objectid
+ --                         AND ios.partition_number = w.partitionnum
                         WHERE w.indexid            = @indexid
                           AND w.objectid           = @objectid
                           AND w.partitionnum       = @partitionnum
