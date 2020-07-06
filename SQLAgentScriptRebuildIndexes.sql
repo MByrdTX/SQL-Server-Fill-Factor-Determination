@@ -354,7 +354,7 @@ SET @command = N'
           AND r.FixFillFactor IS NOT NULL		--don't get indexes still being perturbed
           AND r.DelFlag = 0
           AND @WorkDay  = 1
-          AND NOT EXISTS (SELECT 1  FROM [Admin].AgentIndexRebuilds r2				--relook at this logic.  
+          AND NOT EXISTS (SELECT 1  FROM [Admin].AgentIndexRebuilds r2
                                     WHERE r2.DBName          = @Database
                                       AND r2.[Object_ID]     = r.[Object_ID]
                                       AND r2.Index_ID        = r.Index_ID
@@ -405,7 +405,8 @@ SET @command = N'
     all rows with Object_ID, Index_ID, & PartitionNum
 ***********************************************************************/
             UPDATE r
-                SET DelFlag = 1
+                SET DelFlag = 1,
+					FixFillFactor = NULL
                 FROM [Admin].AgentIndexRebuilds r
                 JOIN #Temp2 t
                   ON  t.[Object_ID]  = r.[Object_ID]
