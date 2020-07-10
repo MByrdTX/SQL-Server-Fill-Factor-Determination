@@ -127,8 +127,6 @@ GO
 
 ******************************************************************************/
 
-USE ROICore
-GO
 
 SET ANSI_NULLS ON
 GO
@@ -145,7 +143,7 @@ CREATE TABLE [Admin].BadPageSplits(
 	Current_Fragmentation float NOT NULL,
 	BadPageSplits bigint NULL,
 	[FillFactor] int NULL,
-	Object_ID int NULL,
+	[Object_ID] int NULL,
 	Index_ID int NULL,
 	Page_Count bigint NULL,
 	Record_Count bigint NULL,

@@ -95,10 +95,10 @@ DECLARE @Retry				 INT = 10;
 code setup for Always On Primary Node; comment out next 4 statements
       if not an Always On Node
 **********************************************************************/
-  DECLARE @preferredReplica INT
-  SET @preferredReplica 
-    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
-  IF (@preferredReplica = 0) 
+--  DECLARE @preferredReplica INT
+--  SET @preferredReplica 
+--    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
+--  IF (@preferredReplica = 0) 
 BEGIN
     DECLARE @Date                                DATETIME = GETDATE();    
     DECLARE @RowCount                            INT = 0;    
@@ -144,6 +144,7 @@ BEGIN
 	DECLARE @ErrorState							 INT, @ErrorLine		INT;
 	DECLARE @Message							 NVARCHAR(4000) = '';
 	DECLARE @StartTime							 DATETIME = GETDATE();
+	DECLARE @DeadLockFound						 BIT = 0;
     SET NOCOUNT ON;     
     SET QUOTED_IDENTIFIER ON;					--needed for XML ops in query below
  
@@ -237,7 +238,7 @@ BEGIN
                   ELSE ISNULL(sub.BadPageSplit,0)/sub.page_count END DESC   
 
 IF @ShowProcessSteps = 1 
-    SELECT '#work_to_do, Line 220',* FROM #work_to_do
+    SELECT '#work_to_do, Line 240',* FROM #work_to_do
 
 /**********************************************************************
 Save all BadPageSplit history per day
@@ -425,7 +426,7 @@ SET @command = N'
                        ,New_PageSplitForIndex
                        ,New_PageAllocationCausedByPageSplit
                        ,New_forwarded_record_count,Redo_Flag)
-                SELECT [OBJECT_ID], Index_ID, TableName,IndexName
+                SELECT DISTINCT [OBJECT_ID], Index_ID, TableName,IndexName
                         ,PartitionNum,Current_Fragmentation
                         ,PageSplitForIndex,PageAllocationCausedByPageSplit
                         ,[FillFactor],page_count,record_count
@@ -459,10 +460,10 @@ SET @command = N'
 								   AND r.DelFlag = 0
 								 /*GROUP BY TableName,IndexName,PartitionNum*/) sub
 							WHERE sub.RowNumber = 1 ) sub2
-                  ON  sub2.TableName    = OBJECT_NAME(w.ObjectID)
-                  AND sub2.IndexName    = i.[name] 
+                  ON  sub2.TableName    = w.TableName
+                  AND sub2.IndexName    = w.IndexName
                   AND sub2.PartitionNum = w.partitionnum
-                ORDER BY w.Frag DESC    
+                ORDER BY w.TableName DESC, w.IndexName DESC;    
 
 		IF @ShowProcessSteps = 1 
             SELECT  DISTINCT 'CursorDefinition',w.objectid, w.indexid
@@ -483,10 +484,10 @@ SET @command = N'
 								   AND r.DelFlag = 0
 								 /*GROUP BY TableName,IndexName,PartitionNum*/) sub
 							WHERE sub.RowNumber = 1 ) sub2
-                  ON  sub2.TableName    = OBJECT_NAME(w.ObjectID)
-                  AND sub2.IndexName    = i.[name] 
+                  ON  sub2.TableName    = w.TableName
+                  AND sub2.IndexName    = w.IndexName
                   AND sub2.PartitionNum = w.partitionnum
-                ORDER BY w.Frag DESC;    
+                ORDER BY w.TableName DESC, w.IndexName DESC;    
 
             -- Open the cursor. 
         OPEN [workcursor]     
@@ -499,6 +500,7 @@ SET @command = N'
         WHILE @@FETCH_STATUS = 0 
           BEGIN 
 		 	SET @Retry = 6;
+			SET @DeadLockFound = 0;
 			SET @StartTime = GETDATE();
             IF @ShowProcessSteps = 1 
                 SELECT 'WorkCursor parameters',@objectid [@objectid], @indexid [@indexid], @partitionnum [@partitionnum]
@@ -575,9 +577,9 @@ SET @command = N'
 		                      AND Index_ID      = @indexid
 		                      AND PartitionNum  = @partitionnum
 		                      AND DelFlag       = 0
-					  END	--Begin at Line 569
-				END			--BEGIN at Line 544
-          END				--Begin at Line 527
+					  END	--Begin at Line 571
+				END			--BEGIN at Line 547
+          END				--Begin at Line 530
 
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
@@ -654,8 +656,8 @@ SET @command = N'
                           AND Index_ID     = @indexid
                           AND PartitionNum = @partitionnum
 						  AND DelFlag      = 0
-                  END		--Begin at Line 646
-                END			--Begin at Line 610
+                  END		--Begin at Line 649
+                END			--Begin at Line 613
             ELSE
                 SET @FillFactor = CASE WHEN @FixFillFactor IS NOT NULL
                                        THEN  @FixFillFactor
@@ -673,7 +675,7 @@ SET @command = N'
                     N'].[' + @objectname + N'] REBUILD WITH (' + @online_on_string +
                     ' DATA_COMPRESSION = ROW,MAXDOP = 1,FILLFACTOR = '+
                     CONVERT(NVARCHAR(5),@FillFactor) + ')'     
-              END		--BEGIN at Line 669
+              END		--BEGIN at Line 672
 
             /**********************************************************
             IF Index is partitioned or this is Saturday or Sunday, 
@@ -687,7 +689,7 @@ SET @command = N'
                      + N'].[' + @objectname + N'] REBUILD PARTITION = ' 
                      + CONVERT(VARCHAR(25),@PartitionNum) + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1)'     
-               END		--BEGIN at Line 682
+               END		--BEGIN at Line 685
 
             IF @WorkDay = 0 AND @PartitionFlag = 0   
                BEGIN
@@ -695,7 +697,7 @@ SET @command = N'
                      ALTER INDEX ' + @indexname +' ON [' + @schemaname 
                      + N'].[' + @objectname + N'] REBUILD ' + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1)'     
-               END		--BEGIN at Line 692
+               END		--BEGIN at Line 695
 
             IF @ShowDynamicSQLCommands = 1 PRINT @command
 
@@ -714,12 +716,15 @@ SET @command = N'
 						WAITFOR DELAY '00:00:10.000';	--delay 10 seconds for retry
 						SET @Retry = @Retry - 1;
 						IF @Retry = 0
+						  BEGIN
 							SELECT 'Retry errored out for', @Command;
+							SET @DeadLockFound = 1
+						  END   --BEGIN at Line 719
 					END CATCH
-				END		--Begin at Line 703
+				END		--Begin at Line 706
 
                 --insert results into history table (AgentIndexRebuilds)
-        IF @PartitionFlag = 0 AND @WorkDay = 1
+        IF @PartitionFlag = 0 AND @WorkDay = 1 AND @DeadLockFound = 0
 		  BEGIN
             INSERT [Admin].AgentIndexRebuilds (CREATEDATE, DBName
                     , SchemaName, TableName, IndexName, PartitionNum
@@ -730,9 +735,9 @@ SET @command = N'
 					, Index_ID, page_count, record_count
 					, forwarded_record_count, New_forwarded_record_count
 					, LagDays,FixFillFactor,DelFlag)
---					OUTPUT INSERTED.ID, INSERTED.CreateDate,INSERTED.TableName,INSERTED.IndexName
-                    SELECT @DATE,@Database,@schemaname,@objectname,@indexname,@partitionnum
-					      ,@frag, ps.avg_fragmentation_in_percent
+					OUTPUT INSERTED.ID, INSERTED.CreateDate,INSERTED.TableName,INSERTED.IndexName
+                    SELECT @DATE,@Database,@schemaname,w.TableName,w.indexname,w.partitionnum
+					      ,w.frag, ps.avg_fragmentation_in_percent
                           ,w.PAGE_SPLIT_FOR_INDEX,w.BadPageSplit/*,ios.LEAF_ALLOCATION_COUNT*/
                           ,w.PAGE_ALLOCATION_CAUSED_BY_PAGESPLIT
                         /*,ios.NONLEAF_ALLOCATION_COUNT*/,@FillFactor,w.objectid
@@ -769,12 +774,11 @@ SET @command = N'
                              ,'SAMPLED');
 					SELECT 'sys.dm_db_index_operational_stats',* FROM sys.dm_db_index_operational_stats
                              (DB_ID(@Database),@objectid,@indexid,@partitionnum);
-                    SELECT 'InsertInto[Admin].AgentIndexRebuilds',@DATE,@Database,@schemaname,@objectname
-                          ,@indexname,@partitionnum,@frag
-                          , ps.avg_fragmentation_in_percent
+                    SELECT 'InsertInto[Admin].AgentIndexRebuilds',@DATE,@Database,@schemaname,w.TableName,w.indexname,w.partitionnum
+					      ,w.frag, ps.avg_fragmentation_in_percent
                           ,w.PAGE_SPLIT_FOR_INDEX,w.BadPageSplit/*,ios.LEAF_ALLOCATION_COUNT*/
                           ,w.PAGE_ALLOCATION_CAUSED_BY_PAGESPLIT
-                        /*,ios.NONLEAF_ALLOCATION_COUNT*/,@FillFactor,w.objectid
+                        /*,ios.NONLEAF_ALLOCATION_COUNT*/,w.Fill_Factor,w.objectid
                         ,w.indexid,w.page_count,w.record_count
                         ,w.forwarded_record_count,ps.forwarded_record_count
                         ,@LagDate,@FixFillFactor,0
@@ -796,14 +800,14 @@ SET @command = N'
                           AND w.partitionnum       = @partitionnum
 						  AND ps.alloc_unit_type_desc	= 'IN_ROW_DATA'
                           AND ps.index_level = 0;   
-				END		--BEGIN at Line 761
-		  END	--Begin at 722		
+				END		--BEGIN at Line 766
+		  END	--Begin at 728		
 
              SET @PartitionFlag = 0;    
              FETCH NEXT FROM [workcursor] 
                  INTO @objectid, @indexid, @partitionnum, @frag
                 ,@FillFactor,@objectname,@indexname,@LagDate,@RowCount;    
-      END		--Begin at line 499  
+      END		--Begin at line 501  
           -- Close and deallocate the cursor. 
             CLOSE [workcursor];     
             DEALLOCATE [workcursor];    
@@ -815,7 +819,7 @@ SET @command = N'
                 DROP TABLE #Temp2;   
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL 
                 DROP TABLE #Temp3;  
-      END --Begin at Line 441  
+      END --Begin at Line 443  
     IF OBJECT_ID(N'tempdb..#work_to_do') IS NOT NULL DROP TABLE #work_to_do;    
     IF @ShowProcessSteps = 1 
 		PRINT 'cleanup';
@@ -826,5 +830,18 @@ SET @command = N'
 		   OR (CreateDate < DATEADD(yy,-1,GETDATE()) AND DelFlag = 1);
     IF @ShowProcessSteps = 1 
 		PRINT 'Data retention';
-END		--Begin at Line 102 
+END		--Begin at Line 102
+
+/*
+Code below is to catch an edge condition where I am getting duplicate rows for some (not all) table/indexes in the AgentIndexRebuilds table.
+I have not been able to find why it occurs -- it just does in production, not development boxes. 
+*/
+  DELETE r1
+	FROM [Admin].AgentIndexRebuilds r1
+	WHERE EXISTS (SELECT 1 FROM [Admin].AgentIndexRebuilds r2
+					WHERE CONVERT(DATE,r2.CreateDate) = CONVERT(DATE,r1.CreateDate)
+					  AND r1.ID < r2.ID
+					  AND r2.TableName = r1.TableName
+					  AND r2.IndexName = r1.IndexName)
+
 GO
