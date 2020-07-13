@@ -40,3 +40,14 @@ Wish List for Improvements:
 	does defragment partitioned indexes.  
 
 Also today revised logic (commented out some lines) to ensure first pass at an index is always with fill factor = 100.
+
+
+20200713:
+
+Revised Scripts for Setup (including AgentIndexRebuilds) table, and SQLAgentScriptRebuildIndexes scripts.  This was something on my wish letter for rewriting the code.  I am still experimenting and tweaking as I find new edge conditions.  One of the major changes in the AgentIndexRebuilds table was to add additional column to help with reporting.  This whole script has evolved to a combined defrag and fill factor determination process.  Current it wil only defrag partitioned scripts and on Saturday/Sunday top 20 worst fragmentation/BadPageSplits.  
+
+I've added the following new columns to AgentIndexRebuilds table:
+     DeadLockFound is a bit field, 0 means no deadlocks errors (number of retries < 6) and 1 means there were 6 retries with no luck in running the dynamic SQL script.  When 1, then that row should be treated as an error.
+     RedoFlag is a bit field, when = 1 means this is an idex that the fillfactor has been static for more than 90 days and is undergoing a new evaluation.
+     ActionTaken is a CHAR(1) field with following values:  R indicates a successful rebuild, E indicates a possible error, and F indicates the fillfactor was tweaked.
+
