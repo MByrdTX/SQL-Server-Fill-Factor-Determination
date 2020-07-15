@@ -51,3 +51,6 @@ I've added the following new columns to AgentIndexRebuilds table:
      RedoFlag is a bit field, when = 1 means this is an idex that the fillfactor has been static for more than 90 days and is undergoing a new evaluation.
      ActionTaken is a CHAR(1) field with following values:  R indicates a successful rebuild, E indicates a possible error, and F indicates the fillfactor was tweaked.
 
+20200715:
+Thanks for the many comments I've received from my SQLFriday presentation last Friday.  They've inspired me to satisfy two of the items on my wish list above -- rewrite the code (also involved changes to the history table (Admin.AgentIndexRebuilds) and added an email report at the end of the script.  As usual I welcome all comments.
+
