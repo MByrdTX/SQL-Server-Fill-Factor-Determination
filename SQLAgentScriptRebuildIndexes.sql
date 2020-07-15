@@ -135,7 +135,7 @@ BEGIN
                                                             --don't perturb fillfactor on Saturdays or Sundays
     DECLARE @WorkDay                             BIT = 	CASE WHEN DATEPART(dw,@Date) IN (1,7) THEN 0
                                                             ELSE 1 END;  
-    DECLARE @Online_On_String                    NVARCHAR(15) = N'';
+    DECLARE @Online_On_String                    NVARCHAR(75) = N'';
     DECLARE @MaxID                               INT;
     DECLARE @MinID                               INT;
     DECLARE @MaxRowNumber                        INT;
@@ -153,13 +153,23 @@ BEGIN
 	DECLARE @StartTime							 DATETIME = GETDATE();
 	DECLARE @DeadLockFound						 BIT = 0;
 	DECLARE @RedoFlag                            BIT = 0;
+	DECLARE @xml								 NVARCHAR(MAX);
+	DECLARE @body                                NVARCHAR(MAX);
     SET NOCOUNT ON;     
     SET QUOTED_IDENTIFIER ON;					--needed for XML ops in query below
  
-
-   IF LOWER(@@VERSION) LIKE '%enterprise edition%' 
-        or LOWER(@@VERSION) LIKE '%developer edition%' 
-            SET @Online_On_String = N'ONLINE = ON,'
+    --Check to see if ONLINE option available and for SS2014 or greater then also wait_at_low_priority option
+	/*  may want to use resume option on index rebuild when SS2017 or higher; would probably want to change code in BEGIN CATCH block below. */
+	IF EXISTS (SELECT 1 FROM [master].[sys].[databases] WHERE database_id = @DatabaseID AND [compatibility_level] < 120)
+	    BEGIN
+            IF LOWER(@@VERSION) LIKE '%enterprise edition%' OR LOWER(@@VERSION) LIKE '%developer edition%' 
+                SET @Online_On_String = N'ONLINE = ON,'
+		END
+	ELSE 
+	    BEGIN
+            IF LOWER(@@VERSION) LIKE '%enterprise edition%' OR LOWER(@@VERSION) LIKE '%developer edition%' 
+                SET @Online_On_String = N'ONLINE = ON(WAIT_AT_LOW_PRIORITY(MAX_DURATION = 1, ABORT_AFTER_WAIT=SELF)),'
+		END;
  
  
     IF @ShowProcessSteps = 1 
@@ -350,7 +360,7 @@ SET @command = N'
 				
             IF @ShowProcessSteps = 1 
                 SELECT 'Redo row added in Admin.AgentIndexRebuilds',* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date
-          END	--Begin at Line 300
+          END	--Begin at Line 313
 
 
     -- Declare the cursor for the list of indexes to be processed. 
@@ -360,7 +370,7 @@ SET @command = N'
             SELECT  DISTINCT w.ID, w.DBName,w.SchemaName,w.[object_id], w.index_id
                     , w.partitionnum, w.Current_Fragmentation,w.[FillFactor]
                     ,w.TableName, w.IndexName
-                    ,DATEDIFF(dd,sub2.CreateDate,GETDATE()) LagDate
+                    ,DATEDIFF(dd,sub2.CreateDate,@Date) LagDate
                     ,@RedoFlag
                 FROM [Admin].AgentIndexRebuilds w
                 LEFT JOIN (SELECT DBName, SchemaName, TableName, IndexName,PartitionNum, CreateDate FROM	--this double logic (rownumber) added 4/19/2020 to cover earlier error putting multiple entries in AgentIndexRebuild table.
@@ -386,7 +396,7 @@ SET @command = N'
             SELECT  DISTINCT 'CursorDefinition',w.ID, w.DBName,w.SchemaName,w.[object_id], w.index_id
                     , w.partitionnum, w.Current_Fragmentation,w.[FillFactor]
                     ,w.TableName, w.IndexName
-                    ,DATEDIFF(dd,sub2.CreateDate,GETDATE()) LagDate
+                    ,DATEDIFF(dd,sub2.CreateDate,@Date) LagDate
                     ,@RedoFlag
                 FROM [Admin].AgentIndexRebuilds w
                 LEFT JOIN (SELECT DBName, SchemaName, TableName, IndexName,PartitionNum, CreateDate FROM	--this double logic (rownumber) added 4/19/2020 to cover earlier error putting multiple entries in AgentIndexRebuild table.
@@ -419,6 +429,7 @@ SET @command = N'
         WHILE @@FETCH_STATUS = 0 
           BEGIN 
 		 	SET @Retry = 6;
+			SET @RedoFlag = 0;
 			SET @DeadLockFound = 0;
 			SET @StartTime = GETDATE();
             IF @ShowProcessSteps = 1 
@@ -492,9 +503,9 @@ SET @command = N'
 		                      AND Index_ID      = @indexid
 		                      AND PartitionNum  = @partitionnum
 		                      AND DelFlag       = 0;
-					  END	--Begin at Line 486
-				END			--BEGIN at Line 462
-          END				--Begin at Line 443
+					  END	--Begin at Line 497
+				END			--BEGIN at Line 473
+          END				--Begin at Line 454
 
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
@@ -571,8 +582,8 @@ SET @command = N'
                           AND Index_ID     = @indexid
                           AND PartitionNum = @partitionnum
 						  AND DelFlag      = 0
-                  END		--Begin at Line 564
-                END			--Begin at Line 528
+                  END		--Begin at Line 575
+                END			--Begin at Line 539
             ELSE
                 SET @FillFactor = CASE WHEN @FixFillFactor IS NOT NULL
                                        THEN  @FixFillFactor
@@ -593,7 +604,7 @@ SET @command = N'
                     N'].[' + @objectname + N'] REBUILD WITH (' + @online_on_string +
                     ' DATA_COMPRESSION = ROW,MAXDOP = 1,FILLFACTOR = '+
                     CONVERT(NVARCHAR(5),@FillFactor) + ')'     
-              END		--BEGIN at Line 587
+              END		--BEGIN at Line 598
 
             /**********************************************************
             IF Index is partitioned or this is Saturday or Sunday, 
@@ -610,7 +621,7 @@ SET @command = N'
                      + N'].[' + @objectname + N'] REBUILD PARTITION = ' 
                      + CONVERT(VARCHAR(25),@PartitionNum) + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1)'     
-               END		--BEGIN at Line 603
+               END		--BEGIN at Line 614
 
             IF @WorkDay = 0 AND @PartitionFlag = 0   
                BEGIN
@@ -621,7 +632,7 @@ SET @command = N'
                      ALTER INDEX ' + @indexname +' ON [' + @schemaname 
                      + N'].[' + @objectname + N'] REBUILD ' + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1)'     
-               END		--BEGIN at Line 616
+               END		--BEGIN at Line 627
 
             IF @ShowDynamicSQLCommands = 1 PRINT @command
 
@@ -647,13 +658,14 @@ SET @command = N'
                                 SET ActionTaken   = 'E',
 								    DeadLockFound = 1
                                 WHERE ID       = @ID;
-						  END   --BEGIN at Line 643
+						  END   --BEGIN at Line 654
 					END CATCH
-				END		--Begin at Line 630
+				END		--Begin at Line 641
 
 		UPDATE air
 		    SET IndexRebuildDuration = DATEDIFF(second,@StartTime,GETDATE()),
-			    New_Fragmentation = ps.avg_fragmentation_in_percent
+			    New_Fragmentation = ps.avg_fragmentation_in_percent,
+				LagDays = @LagDate
 			FROM [Admin].AgentIndexRebuilds air
             JOIN sys.dm_db_index_physical_stats 
                  (@DatabaseID,@objectid,@indexid,@partitionnum,'SAMPLED') ps
@@ -670,13 +682,13 @@ SET @command = N'
 				  SELECT * 
 					FROM [Admin].AgentIndexRebuilds
 					WHERE CreateDate = @Date	
-				END		--BEGIN at Line 669
+				END		--BEGIN at Line 680
 
              SET @PartitionFlag = 0;    
              FETCH NEXT FROM [workcursor] 
                  INTO @ID,@Database,@SchemaName,@objectid, @indexid, @partitionnum, @frag, @FillFactor
                      ,@objectname,@indexname,@LagDate,@RedoFlag;    
-      END		--Begin at line 420  
+      END		--Begin at line 430  
           -- Close and deallocate the cursor. 
             CLOSE [workcursor];     
             DEALLOCATE [workcursor];    
@@ -688,15 +700,52 @@ SET @command = N'
                 DROP TABLE #Temp2;   
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL 
                 DROP TABLE #Temp3;  
-      END --Begin at Line 358  
+      END --Begin at Line 368  
     IF @ShowProcessSteps = 1 
 		PRINT 'cleanup';
 
     --Data retention
     DELETE [Admin].AgentIndexRebuilds
-        WHERE  CreateDate < DATEADD(yy,-3,GETDATE())
-		   OR (CreateDate < DATEADD(yy,-1,GETDATE()) AND DelFlag = 1);
+        WHERE  CreateDate < DATEADD(yy,-3,@Date)
+		   OR (CreateDate < DATEADD(yy,-1,@Date) AND DelFlag = 1);
     IF @ShowProcessSteps = 1 
 		PRINT 'Data retention';
+
+	--Send email report of Indexes touched
+	IF OBJECT_ID(N'tempdb..#Temp5') IS NOT NULL DROP TABLE #Temp5
+	SELECT IndexName
+		, CONVERT(DEC(6,2),Current_Fragmentation) Frag
+		,ISNULL(BadPageSplits,0) BadPageSplits
+		,[FillFactor]
+		,ISNULL(CONVERT(VARCHAR(7),LagDays),'       ') LagDays
+		,ISNULL(CONVERT(VARCHAR(4),RedoFlag),'     ') Redo
+		,ActionTaken [Action]
+	INTO #Temp5
+	FROM [Admin].AgentIndexRebuilds
+	WHERE CreateDate = @Date
+	ORDER BY IndexName
+
+	SET @xml = CAST(( SELECT [IndexName] AS 'td','',[Frag] AS 'td','', [BadPageSplits] AS 'td','', [FillFactor] AS 'td','', [LagDays] AS 'td','', [Redo] AS 'td','', [Action] AS 'td'
+		FROM #Temp5
+		ORDER BY IndexName 
+	FOR XML PATH('tr'), ELEMENTS ) AS NVARCHAR(MAX))
+
+
+	SET @body ='<html><body><H3>SQLAgent FillFactor for '+CONVERT(NVARCHAR(10),@Date,112) + '</H3>
+<table border = 1> 
+<tr>
+<th> IndexName </th> <th> Frag </th> <th> BadPageSplits </th> <th> FillFactor </th>  <th> LagDays </th>  <th> Redo </th>  <th> Action </th> </tr>'    
+ 
+	SET @body = @body + @xml +'</table></body></html>'
+
+	EXEC msdb.dbo.sp_send_dbmail
+	@profile_name = 'DBA_Admin', -- replace with your SQL Database Mail Profile 
+	@body = @body,
+	@body_format ='HTML',
+	@recipients = 'mbyrdtx@gmail.com', -- replace with your email address
+	@subject = 'SQL Agent FillFactor Report' ;
+
+	IF OBJECT_ID(N'tempdb..#Temp5') IS NOT NULL DROP TABLE #Temp5
+
 END		--Begin at Line 108
 GO

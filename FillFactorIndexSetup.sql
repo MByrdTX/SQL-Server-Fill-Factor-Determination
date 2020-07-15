@@ -86,7 +86,7 @@ CREATE TABLE [Admin].AgentIndexRebuilds(
 
 ALTER TABLE [Admin].AgentIndexRebuilds ADD  DEFAULT (CONVERT(DATE,getdate())) FOR CREATEDATE
 
-CREATE UNIQUE CLUSTERED INDEX CIX_AgentIndexRebuilds_CreateDateDBNameSchemaNameTableNameIndexNamePartitionNum ON [Admin].AgentIndexRebuilds
+CREATE UNIQUE CLUSTERED INDEX CIX_AgentIndexRebuilds ON [Admin].AgentIndexRebuilds
 	(CreateDate ASC, DBName ASC, SchemaName ASC, TableName ASC, IndexName ASC, PartitionNum ASC)
 	WITH (DATA_COMPRESSION = Row, FILLFACTOR = 100)';
 
@@ -141,7 +141,7 @@ CREATE TABLE [Admin].AgentIndexRebuilds(
 
 ALTER TABLE [Admin].AgentIndexRebuilds ADD  DEFAULT (CONVERT(DATE,getdate())) FOR CREATEDATE
 
-CREATE UNIQUE CLUSTERED INDEX CIX_AgentIndexRebuilds_CreateDateDBNameSchemaNameTableNameIndexNamePartitionNum ON [Admin].AgentIndexRebuilds
+CREATE UNIQUE CLUSTERED INDEX CIX_AgentIndexRebuilds ON [Admin].AgentIndexRebuilds
 	(CreateDate ASC, DBName ASC, SchemaName ASC, TableName ASC, IndexName ASC, PartitionNum ASC)
 	WITH (DATA_COMPRESSION = Row, FILLFACTOR = 100)';
 	END
