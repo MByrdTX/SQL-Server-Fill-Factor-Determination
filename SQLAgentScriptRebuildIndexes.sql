@@ -162,7 +162,7 @@ BEGIN
     SET QUOTED_IDENTIFIER ON;					--needed for XML ops in query below
  
     --Check to see if ONLINE option available and for SS2014 or greater then also wait_at_low_priority option
-	/*  may want to use resume option on index rebuild when SS2017 or higher; would probably want to change code in BEGIN CATCH block below. */
+	/*  may want to use resume option on index rebuild when SS2017 or higher; would probably want to change code in BEGIN TRY CATCH block below. */
 	IF EXISTS (SELECT 1 FROM [master].[sys].[databases] WHERE database_id = @DatabaseID AND [compatibility_level] < 120)
 	    BEGIN
             IF LOWER(@@VERSION) LIKE '%enterprise edition%' OR LOWER(@@VERSION) LIKE '%developer edition%' 
@@ -339,8 +339,7 @@ SET @command = N'
     all rows with Object_ID, Index_ID, & PartitionNum
 ***********************************************************************/
             UPDATE r
-                SET DelFlag = 1,
-					FixFillFactor = NULL
+                SET DelFlag = 1
                 FROM [Admin].AgentIndexRebuilds r
                 JOIN #Temp2 t
                   ON  t.DBName       = r.DBName
@@ -349,6 +348,7 @@ SET @command = N'
                   AND t.Index_ID     = r.Index_ID
                   AND t.PartitionNum = r.PartitionNum
                   AND (r.DelFlag     IS NULL OR r.DelFlag = 0)
+				  AND r.CreateDate   < @Date
                 WHERE r.DBName      = @Database;   
 
             --add new row to start regression
