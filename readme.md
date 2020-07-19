@@ -54,3 +54,6 @@ I've added the following new columns to AgentIndexRebuilds table:
 20200715:
 Thanks for the many comments I've received from my SQLFriday presentation last Friday.  They've inspired me to satisfy two of the items on my wish list above -- rewrite the code (also involved changes to the history table (Admin.AgentIndexRebuilds) and added an email report at the end of the script.  As usual I welcome all comments.
 
+
+20200719:
+Found major error in clustered index from code for 20200713.  Error is fixed, but if you have run the FillFactorIndexSetup.sql script since 20200713, you should drop the PK and CIX for Admin.AgentIndexRebuils and create a new PK (clustered) based just on ID as originally done.  

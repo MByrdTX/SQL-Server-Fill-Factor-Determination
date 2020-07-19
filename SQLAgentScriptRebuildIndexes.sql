@@ -184,7 +184,7 @@ BEGIN
 	INSERT [Admin].AgentIndexRebuilds
 		(CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
 		,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound,IndexRebuildDuration,RedoFlag,ActionTaken)
-    SELECT  TOP (@TopWorkCount) CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
+    SELECT TOP (@TopWorkCount) CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
 		,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound,IndexRebuildDuration,RedoFlag,ActionTaken        
         FROM ( SELECT   @Date CreateDate, @Database DBName,s.[name] SchemaName,o.[name] TableName,i.[name] IndexName,ps.partition_number partitionnum
 						,ps.avg_fragmentation_in_percent Current_Fragmentation, NULL New_Fragmentation
@@ -349,15 +349,14 @@ SET @command = N'
                   AND t.Index_ID     = r.Index_ID
                   AND t.PartitionNum = r.PartitionNum
                   AND (r.DelFlag     IS NULL OR r.DelFlag = 0)
-				  AND r.CreateDate   < @Date
-                WHERE r.DBName      = @Database;   
+				  AND r.CreateDate   < @Date;
 
             --add new row to start regression
 	           INSERT [Admin].AgentIndexRebuilds
                    (CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
                    ,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound
 				   ,IndexRebuildDuration,RedoFlag,ActionTaken)
-				OUTPUT INSERTED.ID, INSERTED.CreateDate,INSERTED.TableName,INSERTED.IndexName
+				--OUTPUT INSERTED.ID, INSERTED.CreateDate,INSERTED.TableName,INSERTED.IndexName
                 SELECT DISTINCT @Date CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation
                        ,NULL New_Fragmentation,BadPageSplits,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,NULL LagDays
 					   ,NULL FixFillFactor,0 DelFlag,0 DeadLockFound,0 IndexRebuildDuration,1 RedoFlag,NULL ActionTaken
@@ -368,8 +367,8 @@ SET @command = N'
 			  BEGIN
 			    SELECT 'Redo rows added to Admin.AgentIndexRebuilds = ',@RowCount [@RowCount]
                 SELECT 'Redo row added in Admin.AgentIndexRebuilds',* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date
-              END
-          END	--Begin at Line 317
+              END		--BEGIN at Line 367
+          END			--Begin at Line 317
 
 
     -- Declare the cursor for the list of indexes to be processed. 
@@ -511,9 +510,9 @@ SET @command = N'
 		                      AND Index_ID      = @indexid
 		                      AND PartitionNum  = @partitionnum
 		                      AND DelFlag       = 0;
-					  END	--Begin at Line 505
-				END			--BEGIN at Line 481
-          END				--Begin at Line 462
+					  END	--Begin at Line 504
+				END			--BEGIN at Line 480
+          END				--Begin at Line 461
 
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
@@ -590,8 +589,8 @@ SET @command = N'
                           AND Index_ID     = @indexid
                           AND PartitionNum = @partitionnum
 						  AND DelFlag      = 0
-                  END		--Begin at Line 583
-                END			--Begin at Line 547
+                  END		--Begin at Line 582
+                END			--Begin at Line 546
             ELSE
                 SET @FillFactor = CASE WHEN @FixFillFactor IS NOT NULL
                                        THEN  @FixFillFactor
@@ -612,7 +611,7 @@ SET @command = N'
                     N'].[' + @objectname + N'] REBUILD WITH (' + @online_on_string +
                     ' DATA_COMPRESSION = ROW,MAXDOP = 1,FILLFACTOR = '+
                     CONVERT(NVARCHAR(5),@FillFactor) + ')'     
-              END		--BEGIN at Line 606
+              END		--BEGIN at Line 605
 
             /**********************************************************
             IF Index is partitioned or this is Saturday or Sunday, 
@@ -629,7 +628,7 @@ SET @command = N'
                      + N'].[' + @objectname + N'] REBUILD PARTITION = ' 
                      + CONVERT(VARCHAR(25),@PartitionNum) + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1)'     
-               END		--BEGIN at Line 622
+               END		--BEGIN at Line 621
 
             IF @WorkDay = 0 AND @PartitionFlag = 0   
                BEGIN
@@ -640,7 +639,7 @@ SET @command = N'
                      ALTER INDEX ' + @indexname +' ON [' + @schemaname 
                      + N'].[' + @objectname + N'] REBUILD ' + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1)'     
-               END		--BEGIN at Line 635
+               END		--BEGIN at Line 634
 
             IF @ShowDynamicSQLCommands = 1 PRINT @command
 
@@ -666,9 +665,9 @@ SET @command = N'
                                 SET ActionTaken   = 'E',
 								    DeadLockFound = 1
                                 WHERE ID       = @ID;
-						  END   --BEGIN at Line 662
+						  END   --BEGIN at Line 661
 					END CATCH
-				END		--Begin at Line 649
+				END				--Begin at Line 648
 
 		UPDATE air
 		    SET IndexRebuildDuration = DATEDIFF(second,@StartTime,GETDATE()),
@@ -691,13 +690,13 @@ SET @command = N'
 				  SELECT * 
 					FROM [Admin].AgentIndexRebuilds
 					WHERE ID = @ID
-				END		--BEGIN at Line 690
+				END		--BEGIN at Line 689
 
              SET @PartitionFlag = 0;    
              FETCH NEXT FROM [workcursor] 
                  INTO @ID,@Database,@SchemaName,@objectid, @indexid, @partitionnum, @frag, @FillFactor
                      ,@objectname,@indexname,@LagDate,@RedoFlag;    
-      END		--Begin at line 439  
+      END		--Begin at line 438  
           -- Close and deallocate the cursor. 
             CLOSE [workcursor];     
             DEALLOCATE [workcursor];    
@@ -709,7 +708,7 @@ SET @command = N'
                 DROP TABLE #Temp2;   
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL 
                 DROP TABLE #Temp3;  
-      END --Begin at Line 377  
+      END --Begin at Line 376  
     IF @ShowProcessSteps = 1 
 		PRINT 'cleanup';
 
@@ -746,6 +745,9 @@ SET @command = N'
 <th> IndexName </th> <th> Frag </th> <th> BadPageSplits </th> <th> FillFactor </th>  <th> LagDays </th>  <th> Redo </th>  <th> Action </th> </tr>'    
  
 	SET @body = @body + @xml +'</table></body></html>'
+
+    IF @ShowProcessSteps = 1
+		SELECT 'Sending Fillfactor email ',GETDATE();
 
 	EXEC msdb.dbo.sp_send_dbmail
 	@profile_name = @ProfileName, -- replace with your SQL Database Mail Profile (see lines 97-100)

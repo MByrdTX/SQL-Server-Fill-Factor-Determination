@@ -81,14 +81,13 @@ CREATE TABLE [Admin].AgentIndexRebuilds(
 	IndexRebuildDuration INT NULL,		-- Duration (seconds) for each index rebuild
 	RedoFlag BIT NULL,					-- 0 - no redo; 1 - Redo (more than 90 days since last tweaked)
 	ActionTaken CHAR(1) NULL            -- R - ReBuild, E - Error, F - FillFactor tweaked
- CONSTRAINT PK_AgentIndexRebuilds PRIMARY KEY NONCLUSTERED 
+ CONSTRAINT PK_AgentIndexRebuilds PRIMARY KEY CLUSTERED 
 	(ID ASC) )
 
 ALTER TABLE [Admin].AgentIndexRebuilds ADD  DEFAULT (CONVERT(DATE,getdate())) FOR CREATEDATE
 
-CREATE UNIQUE CLUSTERED INDEX CIX_AgentIndexRebuilds ON [Admin].AgentIndexRebuilds
-	(CreateDate ASC, DBName ASC, SchemaName ASC, TableName ASC, IndexName ASC, PartitionNum ASC)
-	WITH (DATA_COMPRESSION = Row, FILLFACTOR = 100)';
+ALTER INDEX PK_AgentIndexRebuilds ON [Admin].AgentIndexRebuilds (ID ASC)
+	WITH (DATA_COMPRESSION = ROW, ONLINE = ON, FILLFACTOR = 100)';
 
 		--now migrate data
 		SET IDENTITY_INSERT [Admin].AgentIndexRebuilds ON;
@@ -141,9 +140,8 @@ CREATE TABLE [Admin].AgentIndexRebuilds(
 
 ALTER TABLE [Admin].AgentIndexRebuilds ADD  DEFAULT (CONVERT(DATE,getdate())) FOR CREATEDATE
 
-CREATE UNIQUE CLUSTERED INDEX CIX_AgentIndexRebuilds ON [Admin].AgentIndexRebuilds
-	(CreateDate ASC, DBName ASC, SchemaName ASC, TableName ASC, IndexName ASC, PartitionNum ASC)
-	WITH (DATA_COMPRESSION = Row, FILLFACTOR = 100)';
+ALTER INDEX PK_AgentIndexRebuilds ON [Admin].AgentIndexRebuilds (ID ASC)
+	WITH (DATA_COMPRESSION = ROW, ONLINE = ON, FILLFACTOR = 100)';
 	END
 
 
