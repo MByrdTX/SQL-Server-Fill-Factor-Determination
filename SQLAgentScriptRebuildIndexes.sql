@@ -175,75 +175,122 @@ BEGIN
                 SET @Online_On_String = N'ONLINE = ON(WAIT_AT_LOW_PRIORITY(MAX_DURATION = 1, ABORT_AFTER_WAIT=SELF)),'
 		END;
  
- 
+
     IF @ShowProcessSteps = 1 
         PRINT 'Retrieving top ' + cast(@TopWorkCount as varchar(5)) + ' indexes to rebuild';
 
-    -- get worse avg_fragmentation indexs (TOP @TopWorkCount)
-    -- conditionally select from the function, 
-	INSERT [Admin].AgentIndexRebuilds
-		(CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
-		,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound,IndexRebuildDuration,RedoFlag,ActionTaken)
-    SELECT TOP (@TopWorkCount) CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
-		,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound,IndexRebuildDuration,RedoFlag,ActionTaken        
-        FROM ( SELECT   @Date CreateDate, @Database DBName,s.[name] SchemaName,o.[name] TableName,i.[name] IndexName,ps.partition_number partitionnum
-						,ps.avg_fragmentation_in_percent Current_Fragmentation, NULL New_Fragmentation
-						,tab.split_count BadPageSplits
-                        ,CASE WHEN i.Fill_Factor = 0 THEN 100 
-                              ELSE i.Fill_Factor END [FillFactor]
-                        ,ps.[object_id],ps.index_id,ps.page_count,ps.record_count,NULL LagDays, NULL FixFillFactor
-						,0 DelFlag,0 DeadLockFound,Null IndexRebuildDuration,0 RedoFlag,NULL ActionTaken
-                        ,ROW_NUMBER() OVER (PARTITION BY ps.object_id,ps.index_id,ps.partition_number ORDER BY tab.split_count DESC)   [RowNumber]
-                   --  --get data for all tables/indexes
-                   --  SAMPLED gives same avg fragmentation as DETAILED and is much faster
-                  FROM sys.dm_db_index_physical_stats (DB_ID(@Database),NULL,NULL,NULL,'SAMPLED') ps 
-                 JOIN sys.indexes i
-                   ON  i.index_id           = ps.index_id
-                   AND i.[object_id]        = ps.[object_id]
-                 JOIN sys.objects o
-                   ON o.[object_id]         = i.[object_id]
-                 JOIN sys.partitions p
-                   ON  p.[object_id]           = i.[object_id]
-                   AND p.index_id           = i.index_id
-                 JOIN sys.schemas as s 
-                   ON s.schema_id  = o.schema_id 
-                 LEFT JOIN sys.allocation_units au
-                   ON au.container_id       = p.[partition_id]
-                 LEFT JOIN (SELECT n.value('(value)[1]', 'bigint') AS alloc_unit_id,
-                                   n.value('(@count)[1]', 'bigint') AS split_count
-                               FROM (SELECT CAST(target_data as XML) target_data
-                               FROM sys.dm_xe_sessions AS s 
-                               JOIN sys.dm_xe_session_targets t
-                                 ON s.[address] = t.event_session_address
-                               WHERE s.[name] = 'SQLskills_TrackPageSplits'
-                                 AND t.target_name = 'histogram' ) as tab
-                            CROSS APPLY target_data.nodes('HistogramTarget/Slot') as q(n) ) AS tab
-                                 ON tab.alloc_unit_id = au.allocation_unit_id
-                 WHERE i.index_id           > 0
-                   AND o.[type]             = 'U'
-                   AND ps.avg_fragmentation_in_percent > 0.0									-- found single case where index was rebuilt right before SQL Agent ran this script
-                   AND (ps.avg_fragmentation_in_percent > 1.20 OR tab.split_count >= 50)		--this is rebuild condition  --50 bad page splits is (for now) just a guess!!!
-                   AND ps.index_level       = 0												-- only look at leaf level
-		         -- logic added to still defrag on weekends and tweak fillfactor on weekdays
-		           AND (@WorkDay = 0 OR (@WorkDay = 1  AND NOT EXISTS (SELECT 1 FROM [Admin].AgentIndexRebuilds air		-- logic to keep from getting fillfactor already set
-                                                                                WHERE air.DBName			= @Database
-                                                                                  AND air.[Object_ID]		= ps.[object_id]
-                                                                                  AND air.Index_ID			= ps.index_id
-                                                                                  AND air.PartitionNum		= ps.partition_number
-                                                                                  AND air.FixFillFactor		IS NOT NULL
-                                                                                  AND air.DelFlag			= 0)))	) sub
-        /*******************************************************************  
-            The ORDER BY below looks at max avg_frag and then alternates the 
-            next day with indexes with max page splits.  
-        *********************************************************************/
-        WHERE sub.RowNumber = 1
-        ORDER BY CASE WHEN DAY(getdate()) % 2 = 1 
-                          THEN sub.Current_Fragmentation
-                      ELSE ISNULL(sub.BadPageSplits,0)/sub.page_count END DESC   
+    -- get worse avg_fragmentation indexes (TOP @TopWorkCount)
+	IF DAY(getdate()) % 2 = 1		--alternate ORDER BY with Current_Fragmentation and BadPageSplits
+		INSERT [Admin].AgentIndexRebuilds
+			(CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
+			,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound,IndexRebuildDuration,RedoFlag,ActionTaken)
+			SELECT DISTINCT TOP (@TopWorkCount)
+							@Date CreateDate, @Database DBName,s.[name] SchemaName,o.[name] TableName,i.[name] IndexName,ps.partition_number partitionnum
+							,ps.avg_fragmentation_in_percent Current_Fragmentation, NULL New_Fragmentation
+							,ISNULL(tab.split_count,0) BadPageSplits
+	                        ,CASE WHEN i.Fill_Factor = 0 THEN 100 
+	                              ELSE i.Fill_Factor END [FillFactor]
+	                        ,ps.[object_id],ps.index_id,ps.page_count,ps.record_count,NULL LagDays, NULL FixFillFactor
+							,0 DelFlag,0 DeadLockFound,Null IndexRebuildDuration,0 RedoFlag,NULL ActionTaken
+				FROM sys.dm_db_index_physical_stats (DB_ID(@Database),NULL,NULL,NULL,'SAMPLED') ps 
+	            JOIN sys.indexes i
+	              ON  i.index_id           = ps.index_id
+	              AND i.[object_id]        = ps.[object_id]
+	            JOIN sys.objects o    
+	              ON o.[object_id]         = i.[object_id]
+	            JOIN sys.partitions p
+	              ON  p.[object_id]           = i.[object_id]
+	              AND p.index_id           = i.index_id
+	            JOIN sys.schemas as s 
+	              ON s.schema_id  = o.schema_id 
+	            JOIN sys.allocation_units au
+	              ON au.container_id       = p.[partition_id]
+	            LEFT JOIN (SELECT n.value('(value)[1]', 'bigint') AS alloc_unit_id,
+	                              n.value('(@count)[1]', 'bigint') AS split_count
+	                          FROM (SELECT CAST(target_data as XML) target_data
+	                                    FROM sys.dm_xe_sessions AS s 
+	                                    JOIN sys.dm_xe_session_targets t
+	                                      ON s.[address] = t.event_session_address
+	                                    WHERE s.[name] = 'SQLskills_TrackPageSplits'
+	                                      AND t.target_name = 'histogram' ) as tab
+	                          CROSS APPLY target_data.nodes('HistogramTarget/Slot') as q(n) ) AS tab
+	                             ON tab.alloc_unit_id = au.allocation_unit_id
+	             WHERE i.index_id           > 0
+	               AND o.[type]             = 'U'
+				   AND au.[type]            = 1													-- IN_ROW_DATA only
+	               AND ps.avg_fragmentation_in_percent > 0.0									-- found single case where index was rebuilt right before SQL Agent ran this script
+	               AND (ps.avg_fragmentation_in_percent > 1.20 OR tab.split_count >= 20)		--this is rebuild condition  --50 bad page splits is (for now) just a guess!!!
+			       AND ps.alloc_unit_type_desc = 'IN_ROW_DATA'
+	               AND ps.index_level       = 0													-- only look at leaf level
+			     -- logic added to still defrag on weekends and tweak fillfactor on weekdays
+			       AND (@WorkDay = 0 OR (@WorkDay = 1  AND NOT EXISTS (SELECT 1 FROM [Admin].AgentIndexRebuilds air		-- logic to keep from getting fillfactor already set
+	                                                                            WHERE air.DBName			= @Database
+	                                                                              AND air.[Object_ID]		= ps.[object_id]
+	                                                                              AND air.Index_ID			= ps.index_id
+	                                                                              AND air.PartitionNum		= ps.partition_number
+	                                                                              AND air.FixFillFactor		IS NOT NULL
+	                                                                              AND air.DelFlag			= 0)))	
+	        ORDER BY ps.avg_fragmentation_in_percent DESC
+	ELSE
+		INSERT [Admin].AgentIndexRebuilds
+			(CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
+			,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound,IndexRebuildDuration,RedoFlag,ActionTaken)
+			SELECT DISTINCT TOP (@TopWorkCount)
+							@Date CreateDate, @Database DBName,s.[name] SchemaName,o.[name] TableName,i.[name] IndexName,ps.partition_number partitionnum
+							,ps.avg_fragmentation_in_percent Current_Fragmentation, NULL New_Fragmentation
+							,ISNULL(tab.split_count,0) BadPageSplits
+	                        ,CASE WHEN i.Fill_Factor = 0 THEN 100 
+	                              ELSE i.Fill_Factor END [FillFactor]
+	                        ,ps.[object_id],ps.index_id,ps.page_count,ps.record_count,NULL LagDays, NULL FixFillFactor
+							,0 DelFlag,0 DeadLockFound,Null IndexRebuildDuration,0 RedoFlag,NULL ActionTaken
+				FROM sys.dm_db_index_physical_stats (DB_ID(@Database),NULL,NULL,NULL,'SAMPLED') ps 
+	            JOIN sys.indexes i
+	              ON  i.index_id           = ps.index_id
+	              AND i.[object_id]        = ps.[object_id]
+	            JOIN sys.objects o    
+	              ON o.[object_id]         = i.[object_id]
+	            JOIN sys.partitions p
+	              ON  p.[object_id]           = i.[object_id]
+	              AND p.index_id           = i.index_id
+	            JOIN sys.schemas as s 
+	              ON s.schema_id  = o.schema_id 
+	            JOIN sys.allocation_units au
+	              ON au.container_id       = p.[partition_id]
+	            LEFT JOIN (SELECT n.value('(value)[1]', 'bigint') AS alloc_unit_id,
+	                              n.value('(@count)[1]', 'bigint') AS split_count
+	                          FROM (SELECT CAST(target_data as XML) target_data
+	                                    FROM sys.dm_xe_sessions AS s 
+	                                    JOIN sys.dm_xe_session_targets t
+	                                      ON s.[address] = t.event_session_address
+	                                    WHERE s.[name] = 'SQLskills_TrackPageSplits'
+	                                      AND t.target_name = 'histogram' ) as tab
+	                          CROSS APPLY target_data.nodes('HistogramTarget/Slot') as q(n) ) AS tab
+	                             ON tab.alloc_unit_id = au.allocation_unit_id
+	             WHERE i.index_id           > 0
+	               AND o.[type]             = 'U'
+				   AND au.[type]            = 1													-- IN_ROW_DATA
+	               AND ps.avg_fragmentation_in_percent > 0.0									-- found single case where index was rebuilt right before SQL Agent ran this script
+	               AND (ps.avg_fragmentation_in_percent > 1.20 OR tab.split_count >= 20)		--this is rebuild condition  --50 bad page splits is (for now) just a guess!!!
+			       AND ps.alloc_unit_type_desc = 'IN_ROW_DATA'
+	               AND ps.index_level       = 0													-- only look at leaf level
+			     -- logic added to still defrag on weekends and tweak fillfactor on weekdays
+			       AND (@WorkDay = 0 OR (@WorkDay = 1  AND NOT EXISTS (SELECT 1 FROM [Admin].AgentIndexRebuilds air		-- logic to keep from getting fillfactor already set
+	                                                                            WHERE air.DBName			= @Database
+	                                                                              AND air.[Object_ID]		= ps.[object_id]
+	                                                                              AND air.Index_ID			= ps.index_id
+	                                                                              AND air.PartitionNum		= ps.partition_number
+	                                                                              AND air.FixFillFactor		IS NOT NULL
+	                                                                              AND air.DelFlag			= 0)))	
+	        ORDER BY ISNULL(tab.split_count,0) DESC
 
-IF @ShowProcessSteps = 1 
-    SELECT 'AgentIdexRebuilds, Line 229',* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
 
+IF @ShowProcessSteps = 1
+  BEGIN
+    SELECT 'AgentIdexRebuilds, Line 304',* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
+--	SELECT 'sys.dm_db_index_physical_stats',* FROM sys.dm_db_index_physical_stats (DB_ID(@Database),NULL,NULL,NULL,'SAMPLED')
+--		WHERE alloc_unit_type_desc = 'IN_ROW_DATA'
+--	      AND index_level       = 0	
+  END			--BEGIN at 288		  
 
 /**********************************************************************
      Reset TrackPageSplits Extended Event (make this a 24 hour capture)
@@ -266,6 +313,8 @@ SET @command = N'
     IF @ShowDynamicSQLCommands = 1 PRINT @command
     EXEC sys.sp_executesql @command   
     
+IF @ShowProcessSteps = 1
+    SELECT 'AgentIdexRebuilds, Line 331',* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
 
 /************************************************************************
     Go back and find oldest index (>@RedoPeriod) with @FixFillFactor 
@@ -288,7 +337,7 @@ SET @command = N'
           AND r.FixFillFactor IS NOT NULL		--don't get indexes still being perturbed
           AND r.DelFlag = 0
           AND @WorkDay  = 1
-		  AND @DeadLockFound = 0
+		  AND r.ActionTaken = 'F'
           AND NOT EXISTS (SELECT 1  FROM [Admin].AgentIndexRebuilds r2
                                     WHERE r2.DBName          = @Database
 									  AND r2.SchemaName      = r.SchemaName
@@ -308,6 +357,8 @@ SET @command = N'
         SET @RowCount = @@ROWCOUNT    
 
         IF @ShowProcessSteps = 1 SELECT '#Temp2',* FROM #Temp2
+		IF @ShowProcessSteps = 1
+		    SELECT 'AgentIdexRebuilds, Line 376',* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
 
 /**********************************************************************
     Go back and recalculate FillFactor for oldest Table/Index 
@@ -367,8 +418,8 @@ SET @command = N'
 			  BEGIN
 			    SELECT 'Redo rows added to Admin.AgentIndexRebuilds = ',@RowCount [@RowCount]
                 SELECT 'Redo row added in Admin.AgentIndexRebuilds',* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date
-              END		--BEGIN at Line 367
-          END			--Begin at Line 317
+              END		--BEGIN at Line 418
+          END			--Begin at Line 368
 
 
     -- Declare the cursor for the list of indexes to be processed. 
@@ -389,7 +440,7 @@ SET @command = N'
 								 WHERE r.DBName  = @Database
 								   AND r.DelFlag = 0
 								   AND r.DeadLockFound = 0
-								   AND r.ActionTaken   <> 'E'
+								   AND r.ActionTaken   = 'F'
 								 /*GROUP BY TableName,IndexName,PartitionNum*/) sub
 							WHERE sub.RowNumber = 1 ) sub2
                   ON  sub2.DBName       = w.DBName
@@ -415,7 +466,7 @@ SET @command = N'
 								 WHERE r.DBName  = @Database
 								   AND r.DelFlag = 0
 								   AND r.DeadLockFound = 0
-								   AND r.ActionTaken   <> 'E'
+								   AND r.ActionTaken   = 'F'
 								 /*GROUP BY TableName,IndexName,PartitionNum*/) sub
 							WHERE sub.RowNumber = 1 ) sub2
                   ON  sub2.DBName       = w.DBName
@@ -447,7 +498,7 @@ SET @command = N'
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL DROP TABLE #Temp3    
 
 /**********************************************************************
-    New logic:  Check last 6 rebuilds in history table and select
+    New logic:  Check at least 6 rebuilds in history table and select
          fillfactor where the last 2 rebuilds had a larger fragmentation.
 
          This was asked for at SQL Saturday Baton Rouge as a means for
@@ -456,16 +507,17 @@ SET @command = N'
          Also added logic to only perturb fillfactors on weekdays.
 ***********************************************************************/
 
-        --check index rebuild table for six entries (this logic sets FixFillFactor when appropriate)
+        --check index rebuild table for at least six entries for this index (this logic sets FixFillFactor when appropriate)
         IF @WorkDay = 1
-          BEGIN    
+          BEGIN 
+		    SET @NewFillFactor = NULL;
             IF OBJECT_ID(N'tempdb..#Temp4') IS NOT NULL DROP TABLE #Temp4
-            SELECT TOP 6 ID,Current_Fragmentation
+            SELECT ID,Current_Fragmentation
                     ,Row_Number() OVER (ORDER BY ID ASC) RowNumber,[FillFactor]
                     ,FixFillFactor,TableName,IndexName,BadPageSplits
                 INTO #Temp4
                 FROM [Admin].AgentIndexRebuilds
-                WHERE DBName = @Database
+                WHERE DBName                = @Database
                   AND [OBJECT_ID]			= @objectid
                   AND Index_ID				= @indexid
                   AND PartitionNum			= @partitionnum
@@ -473,32 +525,25 @@ SET @command = N'
 				  AND DeadLockFound         = 0
 				  AND ActionTaken           = 'F'
 				  AND Current_Fragmentation	> 0.0
-                ORDER BY ID DESC;
+                ORDER BY ID ASC;
 			SET @RowCount = @@ROWCOUNT;
     
 			IF @RowCount >= 6
 				BEGIN
-		            SELECT @MaxID            = MAX(ID),
+		            SELECT  @MaxID           = MAX(ID),
 		                    @MinID           = MIN(ID),
 		                    @MaxRowNumber    = MAX(RowNumber),
 		                    @MinRowNumber    = MIN(RowNumber)
 		                FROM #Temp4;
 					SET @MinFrag = (SELECT MIN(Current_Fragmentation) FROM #Temp4);
+					SET @MinFragID = (SELECT MIN(ID) FROM #Temp4 WHERE Current_Fragmentation = @MinFrag);
         
-		            SELECT @MinFragID                = ID,
-		                   @MinFragBadPageSplits    = BadPageSplits,
+		            SELECT @MinFragBadPageSplits    = BadPageSplits,
 		                   @NewFillFactor            = [FillFactor],
 		                   @FragRowNumber            = RowNumber
-		                FROM #Temp4 t1
-		                WHERE Current_Fragmentation = @MinFrag
-		                  AND ID                    <> @MaxID
-		                  AND @MaxRowNumber-@MinRowNumber = 5
-		                  AND EXISTS (SELECT 1 FROM #Temp4 t2 
-		                                WHERE (t2.RowNumber = t1.RowNumber+1) 
-		                                  AND (t2.Current_Fragmentation >= t1.Current_Fragmentation))
-		                  AND EXISTS (SELECT 1 FROM #Temp4 t3 
-		                                WHERE (t3.RowNumber = t1.RowNumber+2) 
-		                                  AND (t3.Current_Fragmentation >= t1.Current_Fragmentation))
+		                FROM #Temp4
+		                WHERE ID               = @MinFragID
+		                  AND RowNumber        < @MaxRowNumber - 2;  --This was suggested during presentation at SQL Saturday Baton Rouge
     
 		            IF @NewFillFactor IS NOT NULL
 		              BEGIN
@@ -510,9 +555,9 @@ SET @command = N'
 		                      AND Index_ID      = @indexid
 		                      AND PartitionNum  = @partitionnum
 		                      AND DelFlag       = 0;
-					  END	--Begin at Line 504
-				END			--BEGIN at Line 480
-          END				--Begin at Line 461
+					  END	--Begin at Line 549
+				END			--BEGIN at Line 532
+          END				--Begin at Line 512
 
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
@@ -589,8 +634,8 @@ SET @command = N'
                           AND Index_ID     = @indexid
                           AND PartitionNum = @partitionnum
 						  AND DelFlag      = 0
-                  END		--Begin at Line 582
-                END			--Begin at Line 546
+                  END		--Begin at Line 627
+                END			--Begin at Line 591
             ELSE
                 SET @FillFactor = CASE WHEN @FixFillFactor IS NOT NULL
                                        THEN  @FixFillFactor
@@ -611,7 +656,7 @@ SET @command = N'
                     N'].[' + @objectname + N'] REBUILD WITH (' + @online_on_string +
                     ' DATA_COMPRESSION = ROW,MAXDOP = 1,FILLFACTOR = '+
                     CONVERT(NVARCHAR(5),@FillFactor) + ')'     
-              END		--BEGIN at Line 605
+              END		--BEGIN at Line 650
 
             /**********************************************************
             IF Index is partitioned or this is Saturday or Sunday, 
@@ -628,7 +673,7 @@ SET @command = N'
                      + N'].[' + @objectname + N'] REBUILD PARTITION = ' 
                      + CONVERT(VARCHAR(25),@PartitionNum) + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1)'     
-               END		--BEGIN at Line 621
+               END		--BEGIN at Line 666
 
             IF @WorkDay = 0 AND @PartitionFlag = 0   
                BEGIN
@@ -639,7 +684,7 @@ SET @command = N'
                      ALTER INDEX ' + @indexname +' ON [' + @schemaname 
                      + N'].[' + @objectname + N'] REBUILD ' + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1)'     
-               END		--BEGIN at Line 634
+               END		--BEGIN at Line 679
 
             IF @ShowDynamicSQLCommands = 1 PRINT @command
 
@@ -665,9 +710,9 @@ SET @command = N'
                                 SET ActionTaken   = 'E',
 								    DeadLockFound = 1
                                 WHERE ID       = @ID;
-						  END   --BEGIN at Line 661
+						  END   --BEGIN at Line 706
 					END CATCH
-				END				--Begin at Line 648
+				END				--Begin at Line 693
 
 		UPDATE air
 		    SET IndexRebuildDuration = DATEDIFF(second,@StartTime,GETDATE()),
@@ -690,13 +735,13 @@ SET @command = N'
 				  SELECT * 
 					FROM [Admin].AgentIndexRebuilds
 					WHERE ID = @ID
-				END		--BEGIN at Line 689
+				END		--BEGIN at Line 734
 
              SET @PartitionFlag = 0;    
              FETCH NEXT FROM [workcursor] 
                  INTO @ID,@Database,@SchemaName,@objectid, @indexid, @partitionnum, @frag, @FillFactor
                      ,@objectname,@indexname,@LagDate,@RedoFlag;    
-      END		--Begin at line 438  
+      END		--Begin at line 489  
           -- Close and deallocate the cursor. 
             CLOSE [workcursor];     
             DEALLOCATE [workcursor];    
@@ -708,7 +753,7 @@ SET @command = N'
                 DROP TABLE #Temp2;   
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL 
                 DROP TABLE #Temp3;  
-      END --Begin at Line 376  
+      END --Begin at Line 427  
     IF @ShowProcessSteps = 1 
 		PRINT 'cleanup';
 
@@ -758,5 +803,8 @@ SET @command = N'
 
 	IF OBJECT_ID(N'tempdb..#Temp5') IS NOT NULL DROP TABLE #Temp5
 
+	--Big $64 question is do I want to keep the R (rebuild) and E (Error) ActionTaken rows in the history table.  Right now they remain!
+	--DELETE [Admin].AgentIndexRebuilds
+	--	WHERE ActionTaken IN ('R','E');
 END		--Begin at Line 112
 GO
