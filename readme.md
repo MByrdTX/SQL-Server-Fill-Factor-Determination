@@ -59,5 +59,8 @@ Thanks for the many comments I've received from my SQLFriday presentation last F
 Found major error in clustered index from code for 20200713.  Error is fixed, but if you have run the FillFactorIndexSetup.sql script since 20200713, you should drop the PK and CIX for Admin.AgentIndexRebuils and create a new PK (clustered) based just on ID as originally done.  
 
 20200803:
-Finally found best and correct way (if I just have read the documentation) to JOIN sys.allocation_units to sys.partitions.  Also discovered that my transaction log was filling up from the index rebuilds.  This was causing weird errors in my SQLAgentScriptRebuildIndexes script.  But all is resolved now and I think the code will be stable.
+Finally found best and correct way (if I just have read the documentation) to JOIN sys.allocation_units to sys.partitions.  Also discovered that my transaction log was filling up from the index rebuilds.  This was causing weird errors in my SQLAgentScriptRebuildIndexes script.  But all is resolved now and I think the code will be stable.  I welcome any and all comments (good or bad); please send them to mbyrd@byrdnest-tx.com.
+
+Cheers,
+Mike
 

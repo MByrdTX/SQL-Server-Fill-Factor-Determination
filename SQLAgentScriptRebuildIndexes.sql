@@ -723,6 +723,8 @@ IF @ShowProcessSteps = 1
 					BEGIN TRY
 						PRINT @Retry;
 						EXEC sys.sp_executesql @command
+                        CHECKPOINT;                                                      --added to ensure transaction log backup getting everything
+						--EXEC msdb.dbo.sp_start_job N'ROICore TransactionLog backups';    --may or not be needed depending on size transaction log can grow to.
 						SET @Retry = 0;
 					END TRY
 					BEGIN CATCH
@@ -759,7 +761,7 @@ IF @ShowProcessSteps = 1
 	                                SET ActionTaken   = 'E',
 									    LagDays = @LagDate
 	                                WHERE ID       = @ID;
-							END				--Begin at Line 752
+							END				--Begin at Line 754
 					END CATCH
 				END				--Begin at Line 722
 
@@ -790,10 +792,9 @@ IF @ShowProcessSteps = 1
 					  AND r.PartitionNum	= @partitionnum
 					  AND r.CreateDate      = @Date
 					  AND r.ID              = @ID;
-				END		--BEGIN at Line 783
+				END		--BEGIN at Line 787
 
              SET @PartitionFlag = 0; 
-			 CHECKPOINT;							--added to ensure transaction log backup getting everything
              FETCH NEXT FROM [workcursor] 
                  INTO @ID,@Database,@SchemaName,@objectid, @indexid, @partitionnum, @frag, @FillFactor
                      ,@objectname,@indexname,@LagDate,@RedoFlag;    
