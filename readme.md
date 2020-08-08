@@ -61,6 +61,11 @@ Found major error in clustered index from code for 20200713.  Error is fixed, bu
 20200803:
 Finally found best and correct way (if I just have read the documentation) to JOIN sys.allocation_units to sys.partitions.  Also discovered that my transaction log was filling up from the index rebuilds.  This was causing weird errors in my SQLAgentScriptRebuildIndexes script.  But all is resolved now and I think the code will be stable.  I welcome any and all comments (good or bad); please send them to mbyrd@byrdnest-tx.com.
 
+
+20200808:
+
+I am truely sorry for all the recent updates to the script.  I have been  battling an issue and it turns out it is a SS2012 issue (online index rebuilds) that Microsoft never completely resolved.  The code appears to be stable for the newer versions, and I am still going to continue to trouble-shoot the SS2012 issue.
+ 
 Cheers,
 Mike
 
