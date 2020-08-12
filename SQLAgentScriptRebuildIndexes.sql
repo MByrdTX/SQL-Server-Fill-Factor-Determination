@@ -105,10 +105,10 @@ DECLARE @ProfileName		 SYSNAME = CASE WHEN @SvrName = N'RO-SQLDEV' THEN N'DevDB'
 code setup for Always On Primary Node; comment out next 4 statements
       if not an Always On Node
 **********************************************************************/
---  DECLARE @preferredReplica INT
---  SET @preferredReplica 
---    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
---  IF (@preferredReplica = 0) 
+  DECLARE @preferredReplica INT
+  SET @preferredReplica 
+    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
+  IF (@preferredReplica = 0) 
 BEGIN
 	DECLARE @ID                                  INT;
     DECLARE @Date                                DATE = CONVERT(DATE,GETDATE());    
@@ -159,8 +159,10 @@ BEGIN
 	DECLARE @RedoFlag                            BIT = 0;
 	DECLARE @xml								 NVARCHAR(MAX);
 	DECLARE @body                                NVARCHAR(MAX);
+	DECLARE @Counter							 INT;
+	DECLARE @MaxRowID                            INT;
     SET NOCOUNT ON;     
-    SET QUOTED_IDENTIFIER ON;					--needed for XML ops in query below
+    SET QUOTED_IDENTIFIER ON;					--needed for XML ops in BadPageSplit query below
 
 
  
@@ -304,7 +306,7 @@ BEGIN
 
 IF @ShowProcessSteps = 1
   BEGIN 
-    SELECT 'AgentIdexRebuilds, Line 306',GETDATE(),* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
+    SELECT 'AgentIdexRebuilds, Line 309',GETDATE(),* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
 	IF @RowCount > @TopWorkCount 
 	    BEGIN
 	        SELECT 'Initial set of rows into history table = ',@RowCount [RowCount];
@@ -340,7 +342,7 @@ SET @command = N'
     EXEC sys.sp_executesql @command   
     
 IF @ShowProcessSteps = 1
-    SELECT 'AgentIdexRebuilds, Line 342',GETDATE(),* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
+    SELECT 'AgentIdexRebuilds, Line 345',GETDATE(),* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
 
 /************************************************************************
     Go back and find oldest index (>@RedoPeriod) with @FixFillFactor 
@@ -384,7 +386,7 @@ IF @ShowProcessSteps = 1
 
         IF @ShowProcessSteps = 1 SELECT '#Temp2',* FROM #Temp2
 		IF @ShowProcessSteps = 1
-		    SELECT 'AgentIdexRebuilds, Line 386',GETDATE(),* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
+		    SELECT 'AgentIdexRebuilds, Line 389',GETDATE(),* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
 
 /**********************************************************************
     Go back and recalculate FillFactor for oldest Table/Index 
@@ -433,74 +435,67 @@ IF @ShowProcessSteps = 1
                    (CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
                    ,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound
 				   ,IndexRebuildDuration,RedoFlag,ActionTaken)
-				--OUTPUT INSERTED.ID, INSERTED.CreateDate,INSERTED.TableName,INSERTED.IndexName
+				OUTPUT INSERTED.ID, INSERTED.CreateDate,INSERTED.TableName,INSERTED.IndexName
                 SELECT DISTINCT @Date CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation
                        ,NULL New_Fragmentation,BadPageSplits,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,NULL LagDays
 					   ,NULL FixFillFactor,0 DelFlag,0 DeadLockFound,0 IndexRebuildDuration,1 RedoFlag,NULL ActionTaken
-                    FROM #Temp2
+                    FROM #Temp2;
+                SET @MaxRowID = SCOPE_IDENTITY();
 				SET @RowCount = @@ROWCOUNT;
 				
             IF @ShowProcessSteps = 1 
 			  BEGIN
 			    SELECT 'Redo rows added to Admin.AgentIndexRebuilds = ',@RowCount [@RowCount]
-                SELECT 'Redo row added in Admin.AgentIndexRebuilds',GETDATE(),* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date
-              END		--BEGIN at Line 443
-          END			--Begin at Line 393
+                SELECT 'Redo row added in Admin.AgentIndexRebuilds Line 449',GETDATE(),* FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date
+              END		--BEGIN at Line 447
+          END			--Begin at Line 396
 
 
     -- Declare the cursor for the list of indexes to be processed. 
     IF EXISTS (SELECT 1 FROM [Admin].AgentIndexRebuilds WHERE CreateDate = @Date) 
       BEGIN
-        DECLARE [workcursor] CURSOR FOR 
+        DECLARE [workcursor]  CURSOR FOR 
             SELECT  DISTINCT w.ID, w.DBName,w.SchemaName,w.[object_id], w.index_id
                     , w.partitionnum, w.Current_Fragmentation,w.[FillFactor]
                     ,w.TableName, w.IndexName
-                    ,DATEDIFF(dd,sub2.CreateDate,@Date) LagDate
+                    ,DATEDIFF(dd,(SELECT TOP 1 CreateDate
+							          FROM [Admin].AgentIndexRebuilds r 
+							          WHERE r.DBName        = @Database
+							            AND r.SchemaName    = w.SchemaName
+                                        AND r.TableName     = w.TableName
+						                AND r.IndexName     = w.IndexName
+						           	    AND r.PartitionNum  = w.PartitionNum
+							            AND r.DelFlag       = 0
+							            AND r.DeadLockFound = 0
+							            AND r.ActionTaken   = 'F'
+							            AND r.CreateDate    < @Date
+							          ORDER BY r.ID DESC)    ,@Date) LagDate
                     ,w.RedoFlag
                 FROM [Admin].AgentIndexRebuilds w
-                LEFT JOIN (SELECT DBName, SchemaName, TableName, IndexName,PartitionNum, CreateDate FROM	--this double logic (rownumber) added 4/19/2020 to cover earlier error putting multiple entries in AgentIndexRebuild table.
-								(SELECT DBName, SchemaName, TableName, IndexName, PartitionNum, CreateDate
-								     , Row_Number() OVER (PARTITION BY DBName, SchemaName, TableName,IndexName,PartitionNum
-														  ORDER BY CreateDate DESC, ID DESC) RowNumber
-								 FROM [Admin].AgentIndexRebuilds r 
-								 WHERE r.DBName  = @Database
-								   AND r.DelFlag = 0
-								   AND r.DeadLockFound = 0
-								   AND r.ActionTaken   = 'F'
-								   AND r.CreateDate < @Date) sub
-							WHERE sub.RowNumber = 1 ) sub2
-                  ON  sub2.DBName       = w.DBName
-				  AND sub2.SchemaName   = w.SchemaName
-				  AND sub2.TableName    = w.TableName
-                  AND sub2.IndexName    = w.IndexName
-                  AND sub2.PartitionNum = w.partitionnum
 				WHERE w.CreateDate = @Date
+				  AND w.ID         <= @MaxRowID
                 ORDER BY w.TableName DESC, w.IndexName DESC;    
 
 		IF @ShowProcessSteps = 1 
-            SELECT  DISTINCT 'CursorDefinition',w.ID, w.DBName,w.SchemaName,w.[object_id], w.index_id
+            SELECT  DISTINCT 'CursorDefinition Line 480',w.ID, w.DBName,w.SchemaName,w.[object_id], w.index_id
                     , w.partitionnum, w.Current_Fragmentation,w.[FillFactor]
                     ,w.TableName, w.IndexName
-                    ,DATEDIFF(dd,sub2.CreateDate,@Date) LagDate
+                    ,DATEDIFF(dd,(SELECT TOP 1 CreateDate
+							          FROM [Admin].AgentIndexRebuilds r 
+							          WHERE r.DBName        = @Database
+							            AND r.SchemaName    = w.SchemaName
+                                        AND r.TableName     = w.TableName
+						                AND r.IndexName     = w.IndexName
+						           	    AND r.PartitionNum  = w.PartitionNum
+							            AND r.DelFlag       = 0
+							            AND r.DeadLockFound = 0
+							            AND r.ActionTaken   = 'F'
+							            AND r.CreateDate    < @Date
+							          ORDER BY r.ID DESC)    ,@Date) LagDate
                     ,w.RedoFlag
                 FROM [Admin].AgentIndexRebuilds w
-                LEFT JOIN (SELECT DBName, SchemaName, TableName, IndexName,PartitionNum, CreateDate FROM	--this double logic (rownumber) added 4/19/2020 to cover earlier error putting multiple entries in AgentIndexRebuild table.
-								(SELECT DBName, SchemaName, TableName, IndexName, PartitionNum, CreateDate
-								     , Row_Number() OVER (PARTITION BY DBName, SchemaName, TableName,IndexName,PartitionNum
-														  ORDER BY CreateDate DESC, ID DESC) RowNumber
-								 FROM [Admin].AgentIndexRebuilds r 
-								 WHERE r.DBName  = @Database
-								   AND r.DelFlag = 0
-								   AND r.DeadLockFound = 0
-								   AND r.ActionTaken   = 'F'
-								   AND r.CreateDate < @Date) sub
-							WHERE sub.RowNumber = 1 ) sub2
-                  ON  sub2.DBName       = w.DBName
-				  AND sub2.SchemaName   = w.SchemaName
-				  AND sub2.TableName    = w.TableName
-                  AND sub2.IndexName    = w.IndexName
-                  AND sub2.PartitionNum = w.partitionnum
 				WHERE w.CreateDate = @Date
+				  AND w.ID         <= @MaxRowID
                 ORDER BY w.TableName DESC, w.IndexName DESC;    
 
             -- Open the cursor. 
@@ -557,9 +552,9 @@ IF @ShowProcessSteps = 1
     
             IF @ShowProcessSteps = 1 
 			  BEGIN
-				SELECT 'Checking from previous perturbs on this index, Line 559',GETDATE(),* FROM #Temp4;
+				SELECT 'Checking from previous perturbs on this index, Line 555',GETDATE(),* FROM #Temp4;
 				SELECT '@RowCount = ',@RowCount;
-			  END             --BEGIN at Line 552
+			  END             --BEGIN at Line 554
 
 			IF @RowCount >= 6
 				BEGIN
@@ -588,12 +583,12 @@ IF @ShowProcessSteps = 1
 		                      AND Index_ID      = @indexid
 		                      AND PartitionNum  = @partitionnum
 		                      AND DelFlag       = 0;
-					  END	--Begin at Line 581
-				END			--BEGIN at Line 564
-          END				--Begin at Line 538
+					  END	--Begin at Line 577
+				END			--BEGIN at Line 560
+          END				--Begin at Line 534
 
 			IF @ShowProcessSteps = 1
-				SELECT 'FixFillFactor, line 595',GETDATE(),@FixFillFactor [@FixFillFactor], @indexname [@indexname]
+				SELECT 'FixFillFactor, line 591',GETDATE(),@FixFillFactor [@FixFillFactor], @indexname [@indexname]
 
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
@@ -610,7 +605,7 @@ IF @ShowProcessSteps = 1
 
             SET @OldFillFactor = @FillFactor    
             IF @ShowProcessSteps = 1 
-				SELECT 'check for partitioned, line 612',GETDATE(),@PartitionFlag [@PartitionFlag], @OldFillFactor [@OldFillFactor]
+				SELECT 'check for partitioned, line 608',GETDATE(),@PartitionFlag [@PartitionFlag], @OldFillFactor [@OldFillFactor]
 
 
 /**********************************************************************
@@ -670,14 +665,14 @@ IF @ShowProcessSteps = 1
                           AND Index_ID     = @indexid
                           AND PartitionNum = @partitionnum
 						  AND DelFlag      = 0
-                  END		--Begin at Line 656
-                END			--Begin at Line 620
+                  END		--Begin at Line 658
+                END			--Begin at Line 622
             ELSE
                 SET @FillFactor = CASE WHEN @FixFillFactor IS NOT NULL
                                        THEN  @FixFillFactor
                                        ELSE @FillFactor END 
         IF @ShowProcessSteps = 1 
-			SELECT 'calculate new fillfactor, line 679',GETDATE(),@FillFactor [@FillFactor],@FixFillFactor [@FixFillFactor],@PartitionFlag [@PartitionFlag],@WorkDay [@WorkDay]
+			SELECT 'calculate new fillfactor, line 675',GETDATE(),@FillFactor [@FillFactor],@FixFillFactor [@FixFillFactor],@PartitionFlag [@PartitionFlag],@WorkDay [@WorkDay]
 
             /**********************************************************
                 Index is not partitioned
@@ -688,11 +683,12 @@ IF @ShowProcessSteps = 1
 					SET ActionTaken = 'F'
 					WHERE ID       = @ID
                 SET @command = N'SET QUOTED_IDENTIFIER ON     
+				    SET LOCK_TIMEOUT 20000;
                     ALTER INDEX ' + @indexname +' ON [' + @schemaname + 
                     N'].[' + @objectname + N'] REBUILD WITH (' + @online_on_string +
                     ' DATA_COMPRESSION = ROW,MAXDOP = 1,FILLFACTOR = '+
-                    CONVERT(NVARCHAR(5),@FillFactor) + ')'     
-              END		--BEGIN at Line 685
+                    CONVERT(NVARCHAR(5),@FillFactor) + ');';   
+              END		--BEGIN at Line 681
 
             /**********************************************************
             IF Index is partitioned or this is Saturday or Sunday, 
@@ -705,31 +701,54 @@ IF @ShowProcessSteps = 1
 					WHERE ID       = @ID
                  SET @FillFactor = @OldFillFactor    
                  SET @command = N'SET QUOTED_IDENTIFIER ON     
+				     SET LOCK_TIMEOUT 20000;
                      ALTER INDEX ' + @indexname +' ON [' + @schemaname 
                      + N'].[' + @objectname + N'] REBUILD PARTITION = ' 
                      + CONVERT(VARCHAR(25),@PartitionNum) + 
-                     N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1)'     
-               END		--BEGIN at Line 701
+                     N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1);';    
+               END		--BEGIN at Line 698
 
             IF @WorkDay = 0 AND @PartitionFlag = 0   
                BEGIN
 			    UPDATE [Admin].AgentIndexRebuilds
 					SET ActionTaken = 'R'
 					WHERE ID       = @ID
-                 SET @command = N'SET QUOTED_IDENTIFIER ON     
+                 SET @command = N'SET QUOTED_IDENTIFIER ON 
+				     SET LOCK_TIMEOUT 20000;
                      ALTER INDEX ' + @indexname +' ON [' + @schemaname 
                      + N'].[' + @objectname + N'] REBUILD ' + 
-                     N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1)'     
-               END		--BEGIN at Line 714
+                     N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1);';    
+               END		--BEGIN at Line 712
 
             IF @ShowDynamicSQLCommands = 1 SELECT GETDATE(),@command
 
+            --Setup loop to see if any index is currently being rebuilt, if so loop until no result set
+			SET @Counter = 1
   			--Try Catch logic added because of errors caused by other on-going processes
             SET @Message = '';
 			WHILE (@Retry > 0)
 				BEGIN
 					BEGIN TRY
 						SELECT GETDATE(), @Retry [@Retry];
+                        --Setup loop to see if any index is currently being rebuilt ONLINE, if no loop until no result set
+			            SET @Counter = 1
+                        WHILE @Counter = 1
+                        BEGIN				--this loop needed to prevent object concurrency error, checks to see if ONLINE operation already in existence
+						                    -- for the current index. If so, then loops every 5 seconds until ONLINE operation finished. (SS2012 issue only)
+                            IF NOT EXISTS (SELECT * FROM (SELECT r.session_id
+                                                                ,CONVERT(VARCHAR(1000),(SELECT SUBSTRING(text,r.statement_start_offset/2,
+                                                                CASE WHEN r.statement_end_offset = -1 THEN 1000 ELSE (r.statement_end_offset-r.statement_start_offset)/2 END)
+                                                              FROM sys.dm_exec_sql_text(sql_handle))) AS IndexScript
+                                                FROM sys.dm_exec_requests r WHERE command IN ('Alter Index')) sub
+                                                WHERE sub.IndexScript LIKE '%ONLINE%'
+												  AND sub.IndexScript LIKE ('%' + @objectname + '%') )
+                            BEGIN
+							    SET @Counter = 0;
+								BREAK;
+                            END         -- BEGIN at Line 745
+							SELECT 'Looping', GETDATE()
+			                WAITFOR DELAY '00:00:05.000'				--5 second delay
+	                    END              -- BEGIN at Line 736
 						EXEC sys.sp_executesql @command
                         CHECKPOINT;                                                      --added to ensure transaction log backup getting everything
 						SET @Retry = 0;
@@ -746,12 +765,11 @@ IF @ShowProcessSteps = 1
 							BEGIN
 								WAITFOR DELAY '00:01:00.000'				--60 seconds delay
 								SELECT @@SPID [@@SPID];
-								DBCC OpenTran;
 								CONTINUE;
-							END
-						ELSE
+							END           -- BEGIN at 765
+						ELSE       
 							BEGIN
-								SELECT 'Error at Line 751',GETDATE(),@Message;
+								SELECT 'Error at Line 771',GETDATE(),@Message;
 								SELECT 'Retry errored out for', @Command;
 								SET @DeadLockFound = CASE WHEN @Error = 1205 THEN 1
 											 ELSE 0 END;
@@ -761,9 +779,9 @@ IF @ShowProcessSteps = 1
 									    LagDays       = @LagDate
 	                                WHERE ID          = @ID;
 								BREAK;
-						    END    --BEGIN at Line 750
+						    END    --BEGIN at Line 771
                     END CATCH
-				END		           --BEGIN at Line 729
+				END		           --BEGIN at Line 730
 
 
 		IF @Error = 0
@@ -785,20 +803,20 @@ IF @ShowProcessSteps = 1
 
 			IF @ShowProcessSteps = 1
 				BEGIN
-				  SELECT 'Row complete, Line 785',GETDATE(),* 
+				  SELECT 'Row complete, Line 805',GETDATE(),* 
 					FROM [Admin].AgentIndexRebuilds r
 					WHERE r.Object_ID		= @objectid
 					  AND r.Index_ID		= @indexid
 					  AND r.PartitionNum	= @partitionnum
 					  AND r.CreateDate      = @Date
 					  AND r.ID              = @ID;
-				END		--BEGIN at Line 784
+				END		--BEGIN at Line 805
 
              SET @PartitionFlag = 0; 
              FETCH NEXT FROM [workcursor] 
                  INTO @ID,@Database,@SchemaName,@objectid, @indexid, @partitionnum, @frag, @FillFactor
                      ,@objectname,@indexname,@LagDate,@RedoFlag;    
-      END		--Begin at line 514 
+      END		--Begin at line 510
           -- Close and deallocate the cursor. 
             CLOSE [workcursor];     
             DEALLOCATE [workcursor];    
@@ -810,7 +828,7 @@ IF @ShowProcessSteps = 1
                 DROP TABLE #Temp2;   
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL 
                 DROP TABLE #Temp3;  
-      END --Begin at Line 446  
+      END --Begin at Line 456  
     IF @ShowProcessSteps = 1 
 		SELECT 'cleanup', GETDATE();
 

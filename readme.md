@@ -66,6 +66,24 @@ Finally found best and correct way (if I just have read the documentation) to JO
 
 I am truely sorry for all the recent updates to the script.  I have been  battling an issue and it turns out it is a SS2012 issue (online index rebuilds) that Microsoft never completely resolved.  The code appears to be stable for the newer versions, and I am still going to continue to trouble-shoot the SS2012 issue.
  
+
+20200812:
+
+I am slowly sneaking up on the SS2012 issues for ONLINE concurrency issues I've encountered.  Yesterday I added code to check if there is an existing ONLINE operation on the applicable index before rebuilding.  IF so, I do a 5 sec loop until the existing ONLINE operation is complete. AND it worked -- I did not get the concurrency errors as before!
+
+I am still encountering duplicate rows and I am not sure where they are coming from.  It is as if the script is running a second time in close time scenario as the original scheduled script (but I am only getting one set of data in the defrag log).  What is interesting is that frequently the duplicate row (but not all the time) has the bad page splits from the intermediate level = 1 instead of level 0.
+
+If anyone else is encountering these issues (or others) please email me at mbyrd@byrdnest-tx.com and I'll keep on plugging away until the code is works as designed.  Your inputs and ideas are most welcome.
+
+I've been working on this now for ~17 months and have seen much improved performance benefits on the very active OLTP database.  I just want it to get finished.
+
+Others areas that I've found that you may want to consider if you implement this approach:
+
+     * Index rebuilds are logged in the transaction log.
+          * Make sure transaction log can accomodate the rebuilds without running out of space.
+          * ONLINE rebuilds take more space than OFFLINE rebuilds (also take longer).
+          * If in full recovery mode, ensure transaction log backups are frequent enough so that you don't run out of file space.
+
 Cheers,
 Mike
 
