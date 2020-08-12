@@ -583,6 +583,8 @@ IF @ShowProcessSteps = 1
 		                      AND Index_ID      = @indexid
 		                      AND PartitionNum  = @partitionnum
 		                      AND DelFlag       = 0;
+                        IF @ShowProcessSteps = 1
+							SELECT 'New FixFillFactor set', * FROM [Admin].AgentIndexRebuilds WHERE ID = @ID;
 					  END	--Begin at Line 577
 				END			--BEGIN at Line 560
           END				--Begin at Line 534
@@ -621,13 +623,7 @@ IF @ShowProcessSteps = 1
             IF @FixFillFactor IS NULL AND @WorkDay = 1
               BEGIN
                 SET @FillFactor = CASE  WHEN @RedoFlag = 1 
-                                            THEN @FillFactor  --to catch redo index
-                                        --clustered index, only decrement by 1
-                                        --if already 100 then ratchet down
---                                        WHEN @indexid = 1 and 			--commented out to ensure first pass on an index is with fill factor = 100
---                                             @LagDate IS NULL 
---                                          AND @FillFactor = 100 
---                                            THEN 99    
+                                            THEN 100  --to catch redo index
                                         WHEN @indexid = 1 AND 
                                              @LagDate IS NULL 
                                              THEN 100
@@ -665,8 +661,8 @@ IF @ShowProcessSteps = 1
                           AND Index_ID     = @indexid
                           AND PartitionNum = @partitionnum
 						  AND DelFlag      = 0
-                  END		--Begin at Line 658
-                END			--Begin at Line 622
+                  END		--Begin at Line 660
+                END			--Begin at Line 624
             ELSE
                 SET @FillFactor = CASE WHEN @FixFillFactor IS NOT NULL
                                        THEN  @FixFillFactor
@@ -805,12 +801,8 @@ IF @ShowProcessSteps = 1
 				BEGIN
 				  SELECT 'Row complete, Line 805',GETDATE(),* 
 					FROM [Admin].AgentIndexRebuilds r
-					WHERE r.Object_ID		= @objectid
-					  AND r.Index_ID		= @indexid
-					  AND r.PartitionNum	= @partitionnum
-					  AND r.CreateDate      = @Date
-					  AND r.ID              = @ID;
-				END		--BEGIN at Line 805
+					WHERE r.ID              = @ID;
+				END		--BEGIN at Line 807
 
              SET @PartitionFlag = 0; 
              FETCH NEXT FROM [workcursor] 
