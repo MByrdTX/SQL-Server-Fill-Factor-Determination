@@ -84,6 +84,14 @@ Others areas that I've found that you may want to consider if you implement this
           * ONLINE rebuilds take more space than OFFLINE rebuilds (also take longer).
           * If in full recovery mode, ensure transaction log backups are frequent enough so that you don't run out of file space.
 
+
+20200818:
+
+Turns out I've been battling a Microsoft Alway On feature (bug?) for the last 2 months.  The script as checked in today should be very stable and has worked successfully last 5 days.  
+
+I'll talk more about the feature I've found in a forth-coming SQLServerCentral.com article.  What was happening was that the SQL Agent job for my fill factor script on the secondary node (passive) was running in parallel but acting on the primary node -- this was completely an unexpected behavior that I just didn't even consider until the evidence was right before me.  Stand by, I'll document this "feature" hopefully within next 2-3 weeks.
+
+
 Cheers,
 Mike
 
