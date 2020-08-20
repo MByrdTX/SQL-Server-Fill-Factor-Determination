@@ -539,18 +539,18 @@ SET @command = N'
 		                   @FragRowNumber            = RowNumber
 		                FROM #Temp4
 		                WHERE ID               = @MinFragID
-		                  AND RowNumber        < @MaxRowNumber - 2;  --This was suggested during presentation at SQL Saturday Baton Rouge
+		                  AND RowNumber        <= @MaxRowNumber - 2;  --This was suggested during presentation at SQL Saturday Baton Rouge
     
 		            IF @NewFillFactor IS NOT NULL
 		              BEGIN
 		                SET @FixFillFactor = @NewFillFactor
-		                UPDATE [Admin].AgentIndexRebuilds
-		                    SET FixFillFactor = @NewFillFactor
-		                    WHERE DBName        = @Database
-		                      AND [Object_ID]   = @objectid
-		                      AND Index_ID      = @indexid
-		                      AND PartitionNum  = @partitionnum
-		                      AND DelFlag       = 0;
+		                UPDATE r
+		                    SET FixFillFactor = @NewFillFactor,
+								DelFlag       = CASE WHEN r.ID = @MinFragID THEN 0 ELSE 1 END	--DelFlag all other rows
+							FROM [Admin].AgentIndexRebuilds r
+							JOIN #Temp4 t
+							  ON t.ID = r.ID
+
                         IF @ShowProcessSteps = 1
 							SELECT 'New FixFillFactor set', * FROM [Admin].AgentIndexRebuilds WHERE ID = @ID;
 					  END	--Begin at Line 545
