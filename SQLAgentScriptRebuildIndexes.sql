@@ -481,7 +481,8 @@ SET @command = N'
 			SET @Error = 0;
 			SET @StartTime = GETDATE();
             IF @ShowProcessSteps = 1 
-                SELECT 'WorkCursor parameters, Line 489',GETDATE(),@objectid [@objectid], @indexid [@indexid], @partitionnum [@partitionnum]
+                SELECT 'WorkCursor parameters, Line 489',GETDATE(), @ID [@ID],@objectid [@objectid]
+				        , @indexid [@indexid], @partitionnum [@partitionnum]
 						, @frag [@frag], @FillFactor [@FillFactor], @objectname [@objectname]
 						, @indexname [@indexname], @LagDate [@LagDate], @RedoFlag [@RedoFlag] 
 
@@ -543,22 +544,28 @@ SET @command = N'
     
 		            IF @NewFillFactor IS NOT NULL
 		              BEGIN
-		                SET @FixFillFactor = @NewFillFactor
-		                UPDATE r
+		                SET @FixFillFactor = @NewFillFactor;
+
+						UPDATE [Admin].AgentIndexRebuilds			--update FixFillFactor for new row
 		                    SET FixFillFactor = @NewFillFactor,
-								DelFlag       = CASE WHEN r.ID = @MinFragID THEN 0 ELSE 1 END	--DelFlag all other rows
+								DelFlag       = 0
+							WHERE ID = @ID;
+
+		                UPDATE r                                    -- go back and update all previous rows
+		                    SET FixFillFactor = @NewFillFactor,
+								DelFlag       = 1	--DelFlag all other rows
 							FROM [Admin].AgentIndexRebuilds r
 							JOIN #Temp4 t
 							  ON t.ID = r.ID
 
                         IF @ShowProcessSteps = 1
 							SELECT 'New FixFillFactor set', * FROM [Admin].AgentIndexRebuilds WHERE ID = @ID;
-					  END	--Begin at Line 545
-				END			--BEGIN at Line 528
-          END				--Begin at Line 502
+					  END	--Begin at Line 546
+				END			--BEGIN at Line 529
+          END				--Begin at Line 503
 
 			IF @ShowProcessSteps = 1
-				SELECT 'FixFillFactor, line 561',GETDATE(),@FixFillFactor [@FixFillFactor], @indexname [@indexname]
+				SELECT 'FixFillFactor, line 568',GETDATE(),@FixFillFactor [@FixFillFactor], @indexname [@indexname]
 
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
@@ -636,7 +643,7 @@ SET @command = N'
                                        THEN  @FixFillFactor
                                        ELSE @FillFactor END 
         IF @ShowProcessSteps = 1 
-			SELECT 'calculate new fillfactor, line 639',GETDATE(),@FillFactor [@FillFactor],@FixFillFactor [@FixFillFactor],@PartitionFlag [@PartitionFlag],@WorkDay [@WorkDay]
+			SELECT 'calculate new fillfactor, line 646',GETDATE(),@FillFactor [@FillFactor],@FixFillFactor [@FixFillFactor],@PartitionFlag [@PartitionFlag],@WorkDay [@WorkDay]
 
             /**********************************************************
                 Index is not partitioned
@@ -652,7 +659,7 @@ SET @command = N'
                     N'].[' + @objectname + N'] REBUILD WITH (' + @online_on_string +
                     ' DATA_COMPRESSION = ROW,MAXDOP = 1,FILLFACTOR = '+
                     CONVERT(NVARCHAR(5),@FillFactor) + ');';   
-              END		--BEGIN at Line 645
+              END		--BEGIN at Line 652
 
             /**********************************************************
             IF Index is partitioned or this is Saturday or Sunday, 
@@ -670,7 +677,7 @@ SET @command = N'
                      + N'].[' + @objectname + N'] REBUILD PARTITION = ' 
                      + CONVERT(VARCHAR(25),@PartitionNum) + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1);';    
-               END		--BEGIN at Line 662
+               END		--BEGIN at Line 669
 
             IF @WorkDay = 0 AND @PartitionFlag = 0   
                BEGIN
@@ -682,7 +689,7 @@ SET @command = N'
                      ALTER INDEX ' + @indexname +' ON [' + @schemaname 
                      + N'].[' + @objectname + N'] REBUILD ' + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 1);';    
-               END		--BEGIN at Line 676
+               END		--BEGIN at Line 683
 
             IF @ShowDynamicSQLCommands = 1 SELECT GETDATE(),@command [@command]
 
@@ -709,10 +716,10 @@ SET @command = N'
                             BEGIN
 							    SET @Counter = 0;
 								BREAK;
-                            END         -- BEGIN at Line 709
+                            END         -- BEGIN at Line 716
 							SELECT 'Looping', GETDATE()
 			                WAITFOR DELAY '00:00:05.000'				--5 second delay
-	                    END              -- BEGIN at Line 700
+	                    END              -- BEGIN at Line 707
 						EXEC sys.sp_executesql @command
                         CHECKPOINT;                                                      --added to ensure transaction log backup getting everything
 						SET @Retry = 0;
@@ -730,10 +737,10 @@ SET @command = N'
 								WAITFOR DELAY '00:01:00.000'				--60 seconds delay
 								SELECT @@SPID [@@SPID];
 								CONTINUE;
-							END           -- BEGIN at 729
+							END           -- BEGIN at 736
 						ELSE       
 							BEGIN
-								SELECT 'Error at Line 736',GETDATE(),@Message;
+								SELECT 'Error at Line 743',GETDATE(),@Message;
 								SELECT 'Retry errored out for', @Command;
 								SET @DeadLockFound = CASE WHEN @Error = 1205 THEN 1
 											 ELSE 0 END;
@@ -743,9 +750,9 @@ SET @command = N'
 									    LagDays       = @LagDate
 	                                WHERE ID          = @ID;
 								BREAK;
-						    END    --BEGIN at Line 735
+						    END    --BEGIN at Line 742
                     END CATCH
-				END		           --BEGIN at Line 694
+				END		           --BEGIN at Line 701
 
 
 			IF @Error = 0
@@ -770,7 +777,7 @@ SET @command = N'
 				  SELECT 'Row complete, Line 770',GETDATE(),* 
 					FROM [Admin].AgentIndexRebuilds r
 					WHERE r.ID              = @ID;
-				END		--BEGIN at Line 769
+				END		--BEGIN at Line 776
 
              SET @PartitionFlag = 0; 
              FETCH NEXT FROM [workcursor] 
@@ -808,6 +815,7 @@ SET @command = N'
 		,ISNULL(CONVERT(VARCHAR(7),LagDays),'       ') LagDays
 		,ISNULL(CONVERT(VARCHAR(4),RedoFlag),'     ') Redo
 		,ActionTaken [Action]
+		,ISNULL(CONVERT(VARCHAR(6),FixFillFactor),'   ') Fix
 	INTO #Temp5
 	FROM [Admin].AgentIndexRebuilds
 	WHERE CreateDate = @Date
@@ -817,7 +825,7 @@ SET @command = N'
     IF @ShowProcessSteps = 1 
 		SELECT 'EMail query',GETDATE(),* from #Temp5
 
-	SET @xml = CAST(( SELECT [IndexName] AS 'td','',[Frag] AS 'td','', [BadPageSplits] AS 'td','', [FillFactor] AS 'td','', [LagDays] AS 'td','', [Redo] AS 'td','', [Action] AS 'td'
+	SET @xml = CAST(( SELECT [IndexName] AS 'td','',[Frag] AS 'td','', [BadPageSplits] AS 'td','', [FillFactor] AS 'td','', [LagDays] AS 'td','', [Redo] AS 'td','', [Action] AS 'td','', [Fix] AS 'td'
 		FROM #Temp5
 		ORDER BY IndexName 
 	FOR XML PATH('tr'), ELEMENTS ) AS NVARCHAR(MAX))
@@ -826,7 +834,7 @@ SET @command = N'
 	SET @body ='<html><body><H3>SQLAgent FillFactor for '+CONVERT(NVARCHAR(10),@Date,112) + '</H3>
 <table border = 1> 
 <tr>
-<th> IndexName </th> <th> Frag </th> <th> BadPageSplits </th> <th> FillFactor </th>  <th> LagDays </th>  <th> Redo </th>  <th> Action </th> </tr>'    
+<th> IndexName </th> <th> Frag </th> <th> BadPageSplits </th> <th> FillFactor </th>  <th> LagDays </th>  <th> Redo </th>  <th> Action </th>  <th> FIX </th></tr>'    
  
 	SET @body = @body + @xml +'</table></body></html>';
 	SET @Message = 'SQL Agent FillFactor Report from ' + @SvrName;
