@@ -502,6 +502,7 @@ SET @command = N'
         IF @WorkDay = 1
           BEGIN 
 		    SET @NewFillFactor = NULL;
+			SET @FixFillFactor = NULL;
             IF OBJECT_ID(N'tempdb..#Temp4') IS NOT NULL DROP TABLE #Temp4
             SELECT ID,Current_Fragmentation
                     ,Row_Number() OVER (ORDER BY ID ASC) RowNumber,[FillFactor]
