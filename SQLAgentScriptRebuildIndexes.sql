@@ -444,7 +444,7 @@ SET @command = N'
                     ,w.RedoFlag
                 FROM [Admin].AgentIndexRebuilds w
 				WHERE w.CreateDate = @Date
-                ORDER BY w.TableName DESC, w.IndexName DESC;    
+                ORDER BY w.TableName ASC, w.index_id ASC;    --changed to index_id to rebuild CI before NCIndexes
 
 		IF @ShowProcessSteps = 1 
             SELECT  DISTINCT 'CursorDefinition Line 450',w.ID, w.DBName,w.SchemaName,w.[object_id], w.index_id
@@ -465,7 +465,7 @@ SET @command = N'
                     ,w.RedoFlag
                 FROM [Admin].AgentIndexRebuilds w
 				WHERE w.CreateDate = @Date
-                ORDER BY w.TableName DESC, w.IndexName DESC;    
+                ORDER BY w.TableName ASC, w.Index_ID ASC;    
 
             -- Open the cursor. 
         OPEN [workcursor]     
