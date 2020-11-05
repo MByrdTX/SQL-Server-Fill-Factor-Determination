@@ -814,6 +814,7 @@ SET @command = N'
 	SELECT DISTINCT IndexName
 		, CONVERT(DEC(6,2),Current_Fragmentation) Frag
 		,ISNULL(BadPageSplits,0) BadPageSplits
+		,Page_Count [PageCount]
 		,[FillFactor]
 		,ISNULL(CONVERT(VARCHAR(7),LagDays),'       ') LagDays
 		,ISNULL(CONVERT(VARCHAR(4),RedoFlag),'     ') Redo
@@ -829,7 +830,7 @@ SET @command = N'
     IF @ShowProcessSteps = 1 
 		SELECT 'EMail query',GETDATE(),* from #Temp5
 
-	SET @xml = CAST(( SELECT [IndexName] AS 'td','',[Frag] AS 'td','', [BadPageSplits] AS 'td','', [FillFactor] AS 'td','', [LagDays] AS 'td','', [Redo] AS 'td','', [Action] AS 'td','', [Fix] AS 'td','',[Duration] AS 'td'
+	SET @xml = CAST(( SELECT [IndexName] AS 'td','',[Frag] AS 'td','', [BadPageSplits] AS 'td','', [PageCount]  AS 'td','', [FillFactor] AS 'td','', [LagDays] AS 'td','', [Redo] AS 'td','', [Action] AS 'td','', [Fix] AS 'td','',[Duration] AS 'td'
 		FROM #Temp5
 		ORDER BY IndexName 
 	FOR XML PATH('tr'), ELEMENTS ) AS NVARCHAR(MAX))
@@ -838,7 +839,7 @@ SET @command = N'
 	SET @body ='<html><body><H3>SQLAgent FillFactor for '+CONVERT(NVARCHAR(10),@Date,112) + '</H3>
 <table border = 1> 
 <tr>
-<th> IndexName </th> <th> Frag </th> <th> BadPageSplits </th> <th> FillFactor </th>  <th> LagDays </th>  <th> Redo </th>  <th> Action </th>  <th> FIX </th>  <th> DURATION </th> </tr>'    
+<th> IndexName </th> <th> Frag </th> <th> BadPageSplits </th> <th> PageCount </th> <th> FillFactor </th>  <th> LagDays </th>  <th> Redo </th>  <th> Action </th>  <th> FIX </th>  <th> DURATION </th> </tr>'    
  
 	SET @body = @body + @xml +'</table></body></html>';
 	SET @Message = 'SQL Agent FillFactor Report from ' + @SvrName;
