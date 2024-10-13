@@ -1,7 +1,7 @@
---© 2020 | ByrdNest Consulting
+--© 2024 | ByrdNest Consulting
 
 -- ensure a USE <databasename> statement has been executed first. 
---USE <Database>    
+USE <TestDatabaseName>    
 GO    
 /****************************************************************************************
 
@@ -35,75 +35,23 @@ GO
     20190616     Mike Byrd    Revised FillFactor logic
     20190718     Mike Byrd      Added logic to get bad page splits (thanks to Jonathan Kehayias)
                                  https://www.sqlskills.com/blogs/jonathan/tracking-problematic-pages-splits-in-sql-server-2012-extended-events-no-really-this-time/
-	20200712	 Mike Byrd	  Revised Admin.AgentIndexRebuilds table for better daily reporting, removed/added columns
 
 ****************************************************************************************/
 
-DECLARE @Database     SYSNAME = (SELECT DB_NAME());   
-DECLARE @DatabaseID   SMALLINT = DB_ID(@Database);
 SET QUOTED_IDENTIFIER OFF    
+GO
 
-
---check to see if migrating from old AgentIndexRebuilds table or creating new AgentIndexRebuilds table
-IF EXISTS (SELECT 1 FROM sys.sysobjects o JOIN sys.columns c ON c.object_id = o.id 
-                    WHERE o.[name] = 'AgentIndexRebuilds' AND o.xtype  = 'U' AND c.[name] = 'PageSplitForIndex')
-	BEGIN
-		-- this is migration path to migrate data from old AgentIndexRebuilds table to new AgentIndexRebuilds table
-		--	this path also assumes Admin schema has already been generated.  
-		EXEC sp_rename 'Admin.AgentIndexRebuilds','AgentIndexRebuildsOld';
-		EXEC sp_rename '[Admin].AgentIndexRebuildsOld.PK_AgentIndexRebuilds','PK_AgentIndexRebuildsOld';
-
-		--need to use dynamic SQL to generate new AgentIndexRebuilds table
-        IF OBJECT_ID(N'Admin.AgentIndexRebuilds') IS NULL
-            EXEC sp_executesql N'
-SET ANSI_NULLS ON
-SET QUOTED_IDENTIFIER ON
-CREATE TABLE [Admin].AgentIndexRebuilds(
-	ID INT IDENTITY(1,1) NOT NULL,		--Primary Key
-	CreateDate DATE NOT NULL,		    --Create date for row
-	DBName SYSNAME NOT NULL,			--Database Name	
-	SchemaName SYSNAME NOT NULL,		--Table/Index Schema
-	TableName SYSNAME NOT NULL,			--Table Name
-	IndexName SYSNAME NOT NULL,			--Index Name
-	PartitionNum INT NOT NULL,			--Partition Number 
-	Current_Fragmentation FLOAT NOT NULL,	--Index fragmentation in %
-	New_Fragmentation FLOAT NULL,		--Index fragmentation after rebuild
-	BadPageSplits BIGINT NULL,			--Bad Page Split Count
-	[FillFactor] INT NULL,				--Current Fill Factor
-	[Object_ID] INT NULL,				--Object ID
-	Index_ID INT NULL,					--Index ID
-	Page_Count BIGINT NULL,				--Page count for index
-	Record_Count BIGINT NULL,			--Record count for index
-	LagDays INT NULL,					--# of days since last rebuild
-	FixFillFactor INT NULL,				--Final fill factor determination
-	DelFlag BIT NULL,					-- 0 - active, 1 = soft delete
-	DeadLockFound BIT NULL,				-- 0 - no deadlocks, 1 - errored out after deadlock retries
-	IndexRebuildDuration INT NULL,		-- Duration (seconds) for each index rebuild
-	RedoFlag BIT NULL,					-- 0 - no redo; 1 - Redo (more than 90 days since last tweaked)
-	ActionTaken CHAR(1) NULL            -- R - ReBuild, E - Error, F - FillFactor tweaked
- CONSTRAINT PK_AgentIndexRebuilds PRIMARY KEY CLUSTERED 
-	(ID ASC) )
-
-ALTER TABLE [Admin].AgentIndexRebuilds ADD  DEFAULT (CONVERT(DATE,getdate())) FOR CREATEDATE
-
-ALTER INDEX PK_AgentIndexRebuilds ON [Admin].AgentIndexRebuilds (ID ASC)
-	WITH (DATA_COMPRESSION = ROW, ONLINE = ON, FILLFACTOR = 100)';
-
-		--now migrate data
-		SET IDENTITY_INSERT [Admin].AgentIndexRebuilds ON;
-		INSERT [Admin].AgentIndexRebuilds
-			(ID,CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
-			,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound,IndexRebuildDuration
-			,RedoFlag,ActionTaken)
-			SELECT ID,CONVERT(DATE,CreateDate),DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
-					,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag, NULL DeadLockFound, NULL IndexRebuildDuration,NULL,'F'
-				FROM [Admin].AgentIndexRebuildsOld;
-		SET IDENTITY_INSERT [Admin].AgentIndexRebuilds OFF;
-
---		DROP TABLE [Admin].AgentIndexRebuildsOld;
-	END
-ELSE
-    BEGIN
+--check to see if Admin schema exists
+DECLARE @Database SYSNAME = (SELECT DB_NAME())    
+/********************************************************************
+code setup for Always On Primary Node; comment out next 4 statements
+      if not an Always On Node
+**********************************************************************/
+--  DECLARE @preferredReplica INT
+--  SET @preferredReplica 
+--    = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica(@Database))
+--  IF (@preferredReplica = 0)
+    BEGIN		--Dynamic SQL because of SS restriction on CREATE TABlE being first statement in query batch
         --define Admin schema if not exists
         IF NOT EXISTS (SELECT 1 from sys.schemas WHERE [name] = 'Admin')
             EXEC sp_executesql N'CREATE SCHEMA [Admin] AUTHORIZATION [dbo]'    
@@ -111,10 +59,12 @@ ELSE
         IF OBJECT_ID(N'Admin.AgentIndexRebuilds') IS NULL
             EXEC sp_executesql N'
 SET ANSI_NULLS ON
+--GO
 SET QUOTED_IDENTIFIER ON
+--GO
 CREATE TABLE [Admin].AgentIndexRebuilds(
 	ID INT IDENTITY(1,1) NOT NULL,		--Primary Key
-	CreateDate DATE NOT NULL,		    --Create date for row
+	CREATEDATE DATETIME NOT NULL,		--Create date for row
 	DBName SYSNAME NOT NULL,			--Database Name	
 	SchemaName SYSNAME NOT NULL,		--Table/Index Schema
 	TableName SYSNAME NOT NULL,			--Table Name
@@ -122,52 +72,80 @@ CREATE TABLE [Admin].AgentIndexRebuilds(
 	PartitionNum INT NOT NULL,			--Partition Number 
 	Current_Fragmentation FLOAT NOT NULL,	--Index fragmentation in %
 	New_Fragmentation FLOAT NULL,		--Index fragmentation after rebuild
+	PageSplitForIndex BIGINT NULL,		--Good & Bad Page Split Count
 	BadPageSplits BIGINT NULL,			--Bad Page Split Count
+	New_PageSplitForIndex BIGINT NULL,	--Good & Bad Page Split Count after rebuild
+	PageAllocationCausedByPageSplit BIGINT NULL,	--Page splits at intermediate level
+	New_PageAllocationCausedByPageSplit BIGINT NULL,  --Page splits int lvl after rebuild
 	[FillFactor] INT NULL,				--Current Fill Factor
 	[Object_ID] INT NULL,				--Object ID
 	Index_ID INT NULL,					--Index ID
 	Page_Count BIGINT NULL,				--Page count for index
 	Record_Count BIGINT NULL,			--Record count for index
+	Forwarded_Record_Count BIGINT NULL, --n/a (heaps)
+	New_Forwarded_Record_Count BIGINT NULL,	--n/a (heaps)
 	LagDays INT NULL,					--# of days since last rebuild
 	FixFillFactor INT NULL,				--Final fill factor determination
-	DelFlag BIT NULL,					-- 0 - active, 1 = soft delete
-	DeadLockFound BIT NULL,				-- 0 - no deadlocks, 1 - errored out after deadlock retries
-	IndexRebuildDuration TIME NULL,		-- Duration (seconds) for each index rebuild
-	RedoFlag BIT NULL,					-- 0 or null - normal, 1 - Redo (after 90 days with fixed fillfactor)
-	ActionTaken CHAR(1) NULL            -- R - ReBuild, E - Error, F - FillFactor tweaked
- CONSTRAINT PK_AgentIndexRebuilds PRIMARY KEY CLUSTERED 
+	DelFlag INT NULL,					--0 - active, 1 = soft delete
+ CONSTRAINT PK_AgentIndexRebuilds PRIMARY KEY NONCLUSTERED 
 	(ID ASC) )
 
-ALTER TABLE [Admin].AgentIndexRebuilds ADD  DEFAULT (CONVERT(DATE,getdate())) FOR CREATEDATE
-
-ALTER INDEX PK_AgentIndexRebuilds ON [Admin].AgentIndexRebuilds (ID ASC)
-	WITH (DATA_COMPRESSION = ROW, ONLINE = ON, FILLFACTOR = 100)';
-	END
-
-
--- Below code from https://www.sqlskills.com/blogs/jonathan/tracking-problematic-pages-splits-in-sql-server-2012-extended-events-no-really-this-time/
-IF NOT EXISTS (SELECT 1 
-            FROM sys.server_event_sessions 
-            WHERE [name] = 'SQLskills_TrackPageSplits')
-	BEGIN
-
-		-- Create the Event Session to track LOP_DELETE_SPLIT transaction_log operations in the server
-		CREATE EVENT SESSION [SQLskills_TrackPageSplits]
-		ON    SERVER
-		ADD EVENT sqlserver.transaction_log(
-		    WHERE operation = 11  -- LOP_DELETE_SPLIT 
-		      AND database_id = 9 -- CHANGE THIS BASED ON TOP SPLITTING DATABASE!
-		)
-		ADD TARGET package0.histogram(
-		    SET filtering_event_name = 'sqlserver.transaction_log',
-		        source_type = 0, -- Event Column
-		        source = 'alloc_unit_id');
-
-
-		-- Start the Event Session
-		ALTER EVENT SESSION [SQLskills_TrackPageSplits]
-		ON SERVER
-		STATE=START;
-	END	
+ALTER TABLE Admin.AgentIndexRebuilds ADD  DEFAULT (getdate()) FOR CREATEDATE'
+    END
 GO
 
+-- Below code from https://www.sqlskills.com/blogs/jonathan/tracking-problematic-pages-splits-in-sql-server-2012-extended-events-no-really-this-time/
+-- Drop the Event Session so we can recreate it 
+IF EXISTS (SELECT 1 
+            FROM sys.server_event_sessions 
+            WHERE name = 'SQLskills_TrackPageSplits')
+    DROP EVENT SESSION [SQLskills_TrackPageSplits] ON SERVER
+
+-- Create the Event Session to track LOP_DELETE_SPLIT transaction_log operations in the server
+CREATE EVENT SESSION [SQLskills_TrackPageSplits]
+ON    SERVER
+ADD EVENT sqlserver.transaction_log(
+    WHERE operation = 11  -- LOP_DELETE_SPLIT 
+      AND database_id = 9 -- CHANGE THIS BASED ON TOP SPLITTING DATABASE!
+)
+ADD TARGET package0.histogram(
+    SET filtering_event_name = 'sqlserver.transaction_log',
+        source_type = 0, -- Event Column
+        source = 'alloc_unit_id');
+GO
+
+-- Start the Event Session
+ALTER EVENT SESSION [SQLskills_TrackPageSplits]
+ON SERVER
+STATE=START;
+GO
+
+
+
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE Admin.BadPageSplits(
+	ID INT IDENTITY(1,1) NOT NULL,
+	CREATEDATE datetime NOT NULL,
+	TableName sysname NOT NULL,
+	IndexName sysname NOT NULL,
+	PartitionNum int NOT NULL,
+	Current_Fragmentation float NOT NULL,
+	BadPageSplits bigint NULL,
+	[FillFactor] int NULL,
+	[Object_ID] int NULL,
+	Index_ID int NULL,
+	Page_Count bigint NULL,
+	Record_Count bigint NULL,
+ CONSTRAINT PK_BadPageSplits PRIMARY KEY 
+	(ID ASC)
+	WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, DATA_COMPRESSION = ROW) 
+) 
+GO
+
+ALTER TABLE Admin.BadPageSplits ADD  DEFAULT (getdate()) FOR CREATEDATE
+GO
