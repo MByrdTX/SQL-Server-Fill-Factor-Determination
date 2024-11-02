@@ -4,7 +4,7 @@
     
 --Make sure you replace all "<TestDataBaseName>" with actual DB name
 
-DECLARE @preferredReplica     INT = 0
+DECLARE @preferredReplica     INT = 0	--code for always on; not needed if not always on   --@@@@next code@@@@
 SET @preferredReplica =       (SELECT [master].sys.fn_hadr_backup_is_preferred_replica('<TestDataBaseName>'))
 IF (@preferredReplica = 1)    RETURN; 
 /***************************************************************************************
@@ -89,8 +89,8 @@ IF (@preferredReplica = 1)    RETURN;
 
 
 
---Set Configuration parameters
-DECLARE @RedoPeriod             INT     = 120;    --Days
+--Set Configuration parameters														--@@@@next code@@@@
+DECLARE @RedoPeriod             INT     = 120;    --Days (started with 90, but for this DB 120 works better
 DECLARE @TopWorkCount           INT     = 20;    --Specify how large result 
 
 DECLARE @ShowDynamicSQLCommands bit = 1; -- show dynamic SQL commands before they run
@@ -144,9 +144,10 @@ IF (@preferredReplica = 0)
     DECLARE @Command                             NVARCHAR(4000);    
     DECLARE @Msg                                 VARCHAR(256);    
     DECLARE @PartitionFlag                       BIT = 0;  
+																							--@@@@next code@@@@
                                                             --don't perturb fillfactor on Saturdays or Sundays
     DECLARE @WorkDay                             BIT =     CASE WHEN DATEPART(dw,@Date) IN (1,7) THEN 0
-                                                            ELSE 1 END;  
+                                                                ELSE 1 END;  
     DECLARE @Online_On_String                    NVARCHAR(75) = N'';
     DECLARE @MaxID                               INT;
     DECLARE @MinID                               INT;
@@ -169,7 +170,8 @@ IF (@preferredReplica = 0)
     DECLARE @body                                NVARCHAR(MAX);
     DECLARE @Counter                             INT;
 
-    INSERT #LargeTable (TableName)       --special treatment for tables where # of rows > 1billion
+																							--@@@@next code@@@@
+    INSERT #LargeTable (TableName)       --special treatment for tables where # of rows > 1 billion
         SELECT DISTINCT t.name AS TableName
             FROM sys.tables t
             JOIN sys.indexes i 
@@ -184,7 +186,7 @@ IF (@preferredReplica = 0)
     SET NOCOUNT ON;     
     SET QUOTED_IDENTIFIER ON;                    --needed for XML ops in BadPageSplit query below
 
- 
+															--@@@@next code@@@@
     --Check to see if ONLINE option available and for SS2014 or greater then also wait_at_low_priority option
     /*  may want to use resume option on index rebuild when SS2017 or higher; would probably want to change code in BEGIN TRY CATCH block below. */
     IF EXISTS (SELECT 1 FROM [master].[sys].[databases] WHERE database_id = @DatabaseID AND [compatibility_level] < 120)
@@ -201,6 +203,7 @@ IF (@preferredReplica = 0)
     IF @ShowProcessSteps = 1 
         SELECT 'Retrieving top ' + cast(@TopWorkCount as varchar(5)) + ' indexes to rebuild', GETDATE(),@Date [@Date],DAY(@Date) % 2;
 
+																		--@@@@next code@@@@
     IF ((DAY(@Date) % 2 = 1) OR (@WorkDay =0))  --rotate result set by frag one day, then BadPageSplits the next, but on weekends only do frag result set
       BEGIN
         INSERT <TestDataBaseName>.[Admin].AgentIndexRebuilds
@@ -241,6 +244,7 @@ IF (@preferredReplica = 0)
                   ON tab.alloc_unit_id = au.allocation_unit_id
                 WHERE ps.alloc_unit_type_desc = 'IN_ROW_DATA'
                   AND ps.index_level       = 0                                                    -- only look at leaf level
+																		--@@@@next code@@@@
                   AND ps.avg_fragmentation_in_percent > 1.20        --this is rebuild condition  
                   AND i.index_id           > 0
                   AND i.[name]             NOT LIKE 'NonClusteredIndex%'
@@ -259,6 +263,7 @@ IF (@preferredReplica = 0)
                 ORDER BY  ps.avg_fragmentation_in_percent DESC;    
         SET @RowCount = @@ROWCOUNT;
 
+																		--@@@@next code@@@@
         --Only do one index in where TableName in #LargeTable at a time
         DELETE AIR
             OUTPUT deleted.ID,deleted.TableName,deleted.IndexName,deleted.Current_Fragmentation,deleted.BadPageSplits
@@ -318,7 +323,8 @@ IF (@preferredReplica = 0)
                   AND o.is_ms_shipped      = 0
                   AND s.[name]             <> 'Admin'
                   AND au.[type]            = 1                                                    -- IN_ROW_DATA only
-                  AND ISNULL(tab.split_count,0) >= 20        --this is rebuild condition  --20 bad page splits is (for now) just a guess!!!
+ 																		--@@@@next code@@@@
+                 AND ISNULL(tab.split_count,0) >= 20        --this is rebuild condition  --20 bad page splits is (for now) just a guess!!!
                  -- logic added to still defrag on weekends and tweak fillfactor on weekdays
                   AND (@WorkDay = 0 OR (@WorkDay = 1  AND NOT EXISTS (SELECT 1 FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds air        -- logic to keep from getting fillfactor already set
                                                                                WHERE air.DBName            = @Database
@@ -330,6 +336,7 @@ IF (@preferredReplica = 0)
                 ORDER BY  ISNULL(tab.split_count,0) DESC,ps.avg_fragmentation_in_percent DESC ;    
         SET @RowCount = @@ROWCOUNT;
 
+																		--@@@@next code@@@@
         --Only do one index in TableName in #LargeTable at a time
         DELETE air
             OUTPUT deleted.ID,deleted.TableName,deleted.IndexName,deleted.Current_Fragmentation,deleted.BadPageSplits
@@ -347,9 +354,10 @@ IF @ShowProcessSteps = 1
     SELECT 'AgentIdexRebuilds, Line 331',GETDATE(),* FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
 
 /**********************************************************************
-     Reset TrackPageSplits Extended Event (make this a 24 hour capture)
+     Reset TrackPageSplits Extended Event (make this a 24 hour capture), so reset every 24 hours
 ***********************************************************************/
  
+																		--@@@@next code@@@@
  SET @command = N'
             -- Stop the Event Session to clear the target
             ALTER EVENT SESSION [SQLskills_TrackPageSplits]
@@ -370,6 +378,7 @@ SET @command = N'
    
 
     IF OBJECT_ID(N'tempdb..#Temp2') IS NOT NULL DROP TABLE #Temp2 
+																		--@@@@next code@@@@
     IF @WorkDay = 1              --only get redo row on weekdays
       BEGIN
         /************************************************************************
@@ -402,6 +411,7 @@ SET @command = N'
                                           AND r2.DelFlag         = 0
                                           AND r2.DeadLockFound   = 1
                                           AND r2.ID              > r.ID)
+																							--@@@@next code@@@@
               --don't get partitioned tables (no adjusting fill factor)
               -- select top 1 * from <TestDataBaseName>.[Admin].AgentIndexRebuilds
               AND NOT EXISTS (SELECT 1 FROM sys.partitions p 
@@ -421,6 +431,7 @@ SET @command = N'
               BEGIN
                 SET @RedoFlag = 1;
                 UPDATE #Temp2
+																							--@@@@next code@@@@
                     -- start pertubation cycle over again by resetting starting FillFactor  
                     SET [FillFactor] = CASE WHEN Index_ID > 1 
                                              AND is_primary_key = 1 
@@ -473,6 +484,7 @@ SET @command = N'
       END                    --BEGIN at Line 358
 
 
+																		--@@@@next code@@@@
    IF EXISTS (SELECT 1 FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds WHERE CreateDate = @Date) 
       BEGIN
         DECLARE [workcursor]  CURSOR FOR 
@@ -539,6 +551,7 @@ SET @command = N'
 
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL DROP TABLE #Temp3    
 
+																		--@@@@next code@@@@
 /**********************************************************************
     New logic:  Check at least 6 rebuilds in history table and select
          fillfactor where the last 2 rebuilds had a larger fragmentation.
@@ -618,6 +631,7 @@ SET @command = N'
             IF @ShowProcessSteps = 1
                 SELECT 'FixFillFactor, line 580',GETDATE(),@FixFillFactor [@FixFillFactor], @indexname [@indexname]
 
+																		--@@@@next code@@@@
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
         the specified partition number
@@ -636,6 +650,7 @@ SET @command = N'
                 SELECT 'check for partitioned, line 625',GETDATE(),@PartitionFlag [@PartitionFlag], @OldFillFactor [@OldFillFactor]
 
 
+																		--@@@@next code@@@@
 /**********************************************************************
      This is the logic for changing fill factor per index
      Clustered Indexes are perturbed by decrementing the current fill 
@@ -695,7 +710,8 @@ SET @command = N'
         IF @ShowProcessSteps = 1 
             SELECT 'calculate new fillfactor, line 657',GETDATE(),@FillFactor [@FillFactor],@FixFillFactor [@FixFillFactor],@PartitionFlag [@PartitionFlag],@WorkDay [@WorkDay]
 
-            /**********************************************************
+  																		--@@@@next code@@@@
+          /**********************************************************
                 Index is not partitioned
             ***********************************************************/
             IF @PartitionFlag = 0 AND @WorkDay = 1
@@ -747,6 +763,7 @@ SET @command = N'
             SET @Counter = 1
               --Try Catch logic added because of errors caused by other on-going processes
             SET @Message = '';
+																		--@@@@next code@@@@
             WHILE (@Retry > 0)
                 BEGIN
                     BEGIN TRY
@@ -805,7 +822,8 @@ SET @command = N'
                 END                --BEGIN at Line 751
 
 
-            IF @Error = 0
+																		--@@@@next code@@@@
+            IF @Error = 0			-- no errors encounterd, update Admin.AgentIndexRebuilds
               UPDATE air
                 SET IndexRebuildDuration = DATEDIFF(second,@StartTime,GETDATE()),
                     New_Fragmentation = ps.avg_fragmentation_in_percent,
@@ -841,7 +859,7 @@ SET @command = N'
             SELECT 'CLOSE [workcursor] ',GETDATE();      
 
             --clean up        
-            IF OBJECT_ID(N'tempdb..#Temp2') IS NOT NULL 
+             IF OBJECT_ID(N'tempdb..#Temp2') IS NOT NULL 
                 DROP TABLE #Temp2;   
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL 
                 DROP TABLE #Temp3;  
@@ -849,6 +867,7 @@ SET @command = N'
     IF @ShowProcessSteps = 1 
         SELECT 'cleanup', GETDATE();
 
+																		--@@@@next code@@@@
     --Data retention -- three years in Admin.AgentIndexRebuilds table
     DELETE <TestDataBaseName>.[Admin].AgentIndexRebuilds
         WHERE  CreateDate < DATEADD(yy,-3,@Date)
@@ -856,6 +875,7 @@ SET @command = N'
     IF @ShowProcessSteps = 1 
         SELECT 'Data retention',GETDATE();
 
+																		--@@@@next code@@@@
     --Send email report of Indexes touched
     IF OBJECT_ID(N'tempdb..#Temp5') IS NOT NULL DROP TABLE #Temp5
     SELECT DISTINCT IndexName
