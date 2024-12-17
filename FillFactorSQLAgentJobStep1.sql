@@ -1,12 +1,14 @@
---Defragment Indexes
+--Defragment Indexes; Step 1
 
---© 2024 | ByrdNest Consulting
+--© 2020 | ByrdNest Consulting
     
---Make sure you replace all "<TestDataBaseName>" with actual DB name
+-- ensure a USE <databasename> statement has been executed first. 
+--USE ROICore		--<Database>    
+--GO
 
-DECLARE @preferredReplica     INT = 0	--code for always on; not needed if not always on   --@@@@next code@@@@
-SET @preferredReplica =       (SELECT [master].sys.fn_hadr_backup_is_preferred_replica('<TestDataBaseName>'))
-IF (@preferredReplica = 1)    RETURN; 
+DECLARE @preferredReplica       INT = 0
+SET @preferredReplica = (SELECT [master].sys.fn_hadr_backup_is_preferred_replica('ROICore'))
+IF (@preferredReplica = 1)	RETURN; 
 /***************************************************************************************
 
     Index Rebuild (defrag) script with logic from Jeff Moden and
@@ -25,10 +27,10 @@ IF (@preferredReplica = 1)    RETURN;
         partitioned tables) to determine a "near optimum" value for 
         existing conditions.  Once a fill factor value is determined, it 
         is fixed for each succeeding execution of this script.  If the 
-        fill factor value has not changed in last 120 days (configurable,
-        @RedoPeriod), it is again put in the queue for finding the best 
-        fill factor (rationale for this logic is that data skew and 
-        calling patterns from applications may change over time).
+        fill factor value has not changed in last 90 days (configurable),
+        it is again put in the queue for finding the best fill factor 
+        (rationale for this logic is that data skew and calling patterns 
+        from applications may change over time).
 
     If a table and its indexes are partitioned, this script rebuilds the 
         appropriate index partition with no adjustment to the fill factor.  
@@ -83,37 +85,34 @@ IF (@preferredReplica = 1)    RETURN;
     20200712        Mike Byrd        Revised Admin.AgentIndexRebuilds table for better daily reporting, removed un-necessary columns
                                      Updated script (minimal logic change)
     20200905        Mike Byrd        Script stablized, still looking at how to make TOP 20 ORDER BY clause dependent on frag and BPS
-    20230701        Mike Byrd        Added logic to only look at one index for very large tables at a time (needed to keep SQL Agent job from running too long)
 
 ****************************************************************************************/
 
 
 
---Set Configuration parameters														--@@@@next code@@@@
-DECLARE @RedoPeriod             INT     = 120;    --Days (started with 90, but for this DB 120 works better
+--Set Configuration parameters
+DECLARE @RedoPeriod             INT     = 120;    --Days
 DECLARE @TopWorkCount           INT     = 20;    --Specify how large result 
 
 DECLARE @ShowDynamicSQLCommands bit = 1; -- show dynamic SQL commands before they run
 DECLARE @ShowProcessSteps       bit = 1; -- show where we are in the code
                                              
 --  --get current database name
-DECLARE @Database               SYSNAME = (SELECT DB_NAME());
+DECLARE @Database               SYSNAME = 'ROICore'; --(SELECT DB_NAME());
 DECLARE @DatabaseID             SMALLINT = DB_ID(@Database);
 
 DECLARE @Retry                  INT;
 
 --get email profile
 DECLARE @SvrName                SYSNAME = (SELECT TOP 1 [srvname] FROM [master].[sys].[sysservers] WHERE [srvproduct]  = 'SQL Server');
-DECLARE @ProfileName            SYSNAME = N'DBA_Admin';
-          
-
---set up large (many rows) table table
-CREATE TABLE #LargeTable (ID           INT NOT NULL IDENTITY(1,1),
-                          TableName    SYSNAME)
+DECLARE @ProfileName            SYSNAME = CASE WHEN @SvrName = N'RO-SQLDEV' THEN N'DevDB'
+                                               WHEN @SvrName = N'RO-SQL01'   THEN N'DBA_Admin'
+                                               WHEN @SvrName = N'RO-SQL02'   THEN N'DBA_Admin'
+                                               ELSE NULL END;
 
 
 /********************************************************************
-code setup for Always On Primary Node; comment out next IF statement
+code setup for Always On Primary Node; comment out next 3 statements
       if not an Always On Node
 **********************************************************************/
 IF (@preferredReplica = 0) 
@@ -144,10 +143,9 @@ IF (@preferredReplica = 0)
     DECLARE @Command                             NVARCHAR(4000);    
     DECLARE @Msg                                 VARCHAR(256);    
     DECLARE @PartitionFlag                       BIT = 0;  
-																							--@@@@next code@@@@
                                                             --don't perturb fillfactor on Saturdays or Sundays
     DECLARE @WorkDay                             BIT =     CASE WHEN DATEPART(dw,@Date) IN (1,7) THEN 0
-                                                                ELSE 1 END;  
+                                                            ELSE 1 END;  
     DECLARE @Online_On_String                    NVARCHAR(75) = N'';
     DECLARE @MaxID                               INT;
     DECLARE @MinID                               INT;
@@ -169,44 +167,29 @@ IF (@preferredReplica = 0)
     DECLARE @xml                                 NVARCHAR(MAX);
     DECLARE @body                                NVARCHAR(MAX);
     DECLARE @Counter                             INT;
-
-																							--@@@@next code@@@@
-    INSERT #LargeTable (TableName)       --special treatment for tables where # of rows > 1 billion
-        SELECT DISTINCT t.name AS TableName
-            FROM sys.tables t
-            JOIN sys.indexes i 
-              ON t.object_id = i.object_id
-            JOIN sys.partitions p 
-              ON  i.object_id = p.object_id 
-              AND i.index_id = p.index_id
-            WHERE t.is_ms_shipped = 0
-              AND p.rows > 1000000000;
-
-
     SET NOCOUNT ON;     
     SET QUOTED_IDENTIFIER ON;                    --needed for XML ops in BadPageSplit query below
 
-															--@@@@next code@@@@
+ 
     --Check to see if ONLINE option available and for SS2014 or greater then also wait_at_low_priority option
     /*  may want to use resume option on index rebuild when SS2017 or higher; would probably want to change code in BEGIN TRY CATCH block below. */
     IF EXISTS (SELECT 1 FROM [master].[sys].[databases] WHERE database_id = @DatabaseID AND [compatibility_level] < 120)
-        BEGIN
+	    BEGIN
             IF LOWER(@@VERSION) LIKE '%enterprise edition%' OR LOWER(@@VERSION) LIKE '%developer edition%' 
                 SET @Online_On_String = N'ONLINE = ON,'
-        END
+		END
     ELSE 
-        BEGIN
+	    BEGIN
             IF LOWER(@@VERSION) LIKE '%enterprise edition%' OR LOWER(@@VERSION) LIKE '%developer edition%' 
                 SET @Online_On_String = N'ONLINE = ON(WAIT_AT_LOW_PRIORITY(MAX_DURATION = 1, ABORT_AFTER_WAIT=SELF)),'
-        END
+		END
  
     IF @ShowProcessSteps = 1 
         SELECT 'Retrieving top ' + cast(@TopWorkCount as varchar(5)) + ' indexes to rebuild', GETDATE(),@Date [@Date],DAY(@Date) % 2;
 
-																		--@@@@next code@@@@
     IF ((DAY(@Date) % 2 = 1) OR (@WorkDay =0))  --rotate result set by frag one day, then BadPageSplits the next, but on weekends only do frag result set
       BEGIN
-        INSERT <TestDataBaseName>.[Admin].AgentIndexRebuilds
+        INSERT ROICore.[Admin].AgentIndexRebuilds
             (CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
             ,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound,IndexRebuildDuration,RedoFlag,ActionTaken)
 --            OUTPUT inserted.ID,inserted.TableName,Inserted.IndexName,inserted.Current_Fragmentation,inserted.BadPageSplits
@@ -218,25 +201,25 @@ IF (@preferredReplica = 0)
                               ELSE i.Fill_Factor END [FillFactor]
                         ,ps.[object_id],ps.index_id,ps.page_count,ps.record_count,NULL LagDays, NULL FixFillFactor
                         ,0 DelFlag,0 DeadLockFound,Null IndexRebuildDuration,0 RedoFlag,NULL ActionTaken
-                FROM <TestDataBaseName>.sys.dm_db_index_physical_stats (@DatabaseID,NULL,NULL,NULL,'SAMPLED') ps 
-                JOIN <TestDataBaseName>.sys.partitions p
+                FROM ROICore.sys.dm_db_index_physical_stats (@DatabaseID,NULL,NULL,NULL,'SAMPLED') ps 
+                JOIN ROICore.sys.partitions p
                   ON  p.[object_id]        = ps.[object_id]
                   AND p.index_id           = ps.index_id
                   AND p.partition_number   = ps.partition_number
-                JOIN <TestDataBaseName>.sys.indexes i
+                JOIN ROICore.sys.indexes i
                   ON  i.index_id           = ps.index_id
                   AND i.[object_id]        = ps.[object_id]
-                JOIN <TestDataBaseName>.sys.objects o    
+                JOIN ROICore.sys.objects o    
                   ON o.[object_id]         = i.[object_id]
-                JOIN <TestDataBaseName>.sys.schemas as s 
+                JOIN ROICore.sys.schemas as s 
                   ON s.[schema_id]         = o.[schema_id] 
-                JOIN <TestDataBaseName>.sys.allocation_units au
+                JOIN ROICore.sys.allocation_units au
                   ON au.container_id       = p.[hobt_id]
                 LEFT JOIN (SELECT n.value('(value)[1]', 'bigint') AS alloc_unit_id,
                                   n.value('(@count)[1]', 'bigint') AS split_count
                               FROM (SELECT CAST(target_data as XML) target_data
-                                        FROM <TestDataBaseName>.sys.dm_xe_sessions AS s 
-                                        JOIN <TestDataBaseName>.sys.dm_xe_session_targets t
+                                        FROM ROICore.sys.dm_xe_sessions AS s 
+                                        JOIN ROICore.sys.dm_xe_session_targets t
                                           ON s.[address]    = t.event_session_address
                                         WHERE s.[name]      = 'SQLskills_TrackPageSplits'
                                           AND t.target_name = 'histogram' ) as tab
@@ -244,16 +227,16 @@ IF (@preferredReplica = 0)
                   ON tab.alloc_unit_id = au.allocation_unit_id
                 WHERE ps.alloc_unit_type_desc = 'IN_ROW_DATA'
                   AND ps.index_level       = 0                                                    -- only look at leaf level
-																		--@@@@next code@@@@
                   AND ps.avg_fragmentation_in_percent > 1.20        --this is rebuild condition  
                   AND i.index_id           > 0
                   AND i.[name]             NOT LIKE 'NonClusteredIndex%'
+                  --AND o.[name]             NOT IN ('FileAttribute', 'FileLogItem')
                   AND o.[type]             = 'U'
                   AND o.is_ms_shipped      = 0
                   AND s.[name]             <> 'Admin'
                   AND au.[type]            = 1                                                    -- IN_ROW_DATA only
                  -- logic added to still defrag on weekends and tweak fillfactor on weekdays
-                  AND (@WorkDay = 0 OR (@WorkDay = 1  AND NOT EXISTS (SELECT 1 FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds air        -- logic to keep from getting fillfactor already set
+                  AND (@WorkDay = 0 OR (@WorkDay = 1  AND NOT EXISTS (SELECT 1 FROM ROICore.[Admin].AgentIndexRebuilds air        -- logic to keep from getting fillfactor already set
                                                                                WHERE air.DBName            = @Database
                                                                                  AND air.[Object_ID]       = ps.[object_id]
                                                                                  AND air.Index_ID          = ps.index_id
@@ -263,24 +246,23 @@ IF (@preferredReplica = 0)
                 ORDER BY  ps.avg_fragmentation_in_percent DESC;    
         SET @RowCount = @@ROWCOUNT;
 
-																		--@@@@next code@@@@
-        --Only do one index in where TableName in #LargeTable at a time
-        DELETE AIR
-            OUTPUT deleted.ID,deleted.TableName,deleted.IndexName,deleted.Current_Fragmentation,deleted.BadPageSplits
-            FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds air
-            JOIN (SELECT ID, COUNT(ID) OVER ( ORDER BY Current_Fragmentation DESC) RowNumber
-                    FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds air
-                    WHERE TableName IN (SELECT TableName FROM #LargeTable)
-                      AND CreateDate = @Date) sub
-              ON  sub.ID = air.Id
-              AND sub.RowNumber <> 1;
+		--Only do one index in FileLogItem or FileAttribute at a time
+		DELETE AIR
+			OUTPUT deleted.ID,deleted.TableName,deleted.IndexName,deleted.Current_Fragmentation,deleted.BadPageSplits
+			FROM ROICore.[Admin].AgentIndexRebuilds air
+			JOIN (SELECT ID, COUNT(ID) OVER ( ORDER BY Current_Fragmentation DESC) RowNumber
+					FROM ROICore.[Admin].AgentIndexRebuilds air
+					WHERE TableName IN ('FileLogItem','FileAttribute')
+					  AND CreateDate = @Date) sub
+			  ON  sub.ID = air.Id
+			  AND sub.RowNumber <> 1;
 
       END              --BEGIN at Line 187
     ELSE
       BEGIN
-        INSERT <TestDataBaseName>.[Admin].AgentIndexRebuilds
+        INSERT ROICore.[Admin].AgentIndexRebuilds
             (CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
-             ,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound,IndexRebuildDuration,RedoFlag,ActionTaken)
+            ,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound,IndexRebuildDuration,RedoFlag,ActionTaken)
 --            OUTPUT inserted.ID,inserted.TableName,Inserted.IndexName,inserted.Current_Fragmentation,inserted.BadPageSplits
             SELECT TOP (@TopWorkCount)
                         @Date CreateDate, @Database DBName,s.[name] SchemaName,o.[name] TableName,i.[name] IndexName,ps.partition_number partitionnum
@@ -293,25 +275,25 @@ IF (@preferredReplica = 0)
                 FROM (SELECT n.value('(value)[1]', 'bigint') AS alloc_unit_id,
                              n.value('(@count)[1]', 'bigint') AS split_count
                           FROM (SELECT CAST(target_data as XML) target_data
-                                    FROM <TestDataBaseName>.sys.dm_xe_sessions AS s 
-                                    JOIN <TestDataBaseName>.sys.dm_xe_session_targets t
+                                    FROM ROICore.sys.dm_xe_sessions AS s 
+                                    JOIN ROICore.sys.dm_xe_session_targets t
                                       ON s.address = t.event_session_address
                                     WHERE s.name = 'SQLskills_TrackPageSplits'
                                       AND t.target_name = 'histogram' ) as tab
                           CROSS APPLY target_data.nodes('HistogramTarget/Slot') as q(n)
                      ) AS tab
-                JOIN <TestDataBaseName>.sys.allocation_units AS au
+                JOIN ROICore.sys.allocation_units AS au
                   ON tab.alloc_unit_id = au.allocation_unit_id
-                JOIN <TestDataBaseName>.sys.partitions AS p
+                JOIN ROICore.sys.partitions AS p
                  ON au.container_id        = p.hobt_id
-                JOIN <TestDataBaseName>.sys.indexes AS i
+                JOIN ROICore.sys.indexes AS i
                   ON  p.object_id          = i.object_id
                   AND p.index_id           = i   .index_id
-                JOIN <TestDataBaseName>.sys.objects AS o
+                JOIN ROICore.sys.objects AS o
                   ON p.object_id           = o.object_id
-                JOIN <TestDataBaseName>.sys.schemas as s 
+                JOIN ROICore.sys.schemas as s 
                   ON s.[schema_id]         = o.[schema_id] 
-                JOIN <TestDataBaseName>.sys.dm_db_index_physical_stats (@DatabaseID,NULL,NULL,NULL,'SAMPLED') ps
+                JOIN ROICore.sys.dm_db_index_physical_stats (@DatabaseID,NULL,NULL,NULL,'SAMPLED') ps
                   ON  p.[object_id]        = ps.[object_id]
                   AND p.index_id           = ps.index_id
                   AND p.partition_number   = ps.partition_number
@@ -320,13 +302,13 @@ IF (@preferredReplica = 0)
                   AND i.index_id           > 0
                   AND i.[name]             NOT LIKE 'NonClusteredIndex%'
                   AND o.[type]             = 'U'
+                  --AND o.[name]             NOT IN ('FileAttribute', 'FileLogItem')
                   AND o.is_ms_shipped      = 0
                   AND s.[name]             <> 'Admin'
                   AND au.[type]            = 1                                                    -- IN_ROW_DATA only
- 																		--@@@@next code@@@@
-                 AND ISNULL(tab.split_count,0) >= 20        --this is rebuild condition  --20 bad page splits is (for now) just a guess!!!
+                  AND ISNULL(tab.split_count,0) >= 10  --20        --this is rebuild condition  --20 bad page splits is (for now) just a guess!!!
                  -- logic added to still defrag on weekends and tweak fillfactor on weekdays
-                  AND (@WorkDay = 0 OR (@WorkDay = 1  AND NOT EXISTS (SELECT 1 FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds air        -- logic to keep from getting fillfactor already set
+                  AND (@WorkDay = 0 OR (@WorkDay = 1  AND NOT EXISTS (SELECT 1 FROM ROICore.[Admin].AgentIndexRebuilds air        -- logic to keep from getting fillfactor already set
                                                                                WHERE air.DBName            = @Database
                                                                                  AND air.[Object_ID]        = ps.[object_id]
                                                                                  AND air.Index_ID            = ps.index_id
@@ -336,28 +318,26 @@ IF (@preferredReplica = 0)
                 ORDER BY  ISNULL(tab.split_count,0) DESC,ps.avg_fragmentation_in_percent DESC ;    
         SET @RowCount = @@ROWCOUNT;
 
-																		--@@@@next code@@@@
-        --Only do one index in TableName in #LargeTable at a time
-        DELETE air
-            OUTPUT deleted.ID,deleted.TableName,deleted.IndexName,deleted.Current_Fragmentation,deleted.BadPageSplits
-            FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds air
-            JOIN (SELECT air.ID, COUNT(ID) OVER ( ORDER BY BadPageSplits DESC) RowNumber
-                    FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds air
-                    WHERE TableName IN (SELECT TableName FROM #LargeTable)
-                      AND CreateDate = @Date) sub
-              ON  sub.ID = air.Id
-              AND sub.RowNumber <> 1;
+		--Only do one index in FileLogItem or FileAttribute at a time
+		DELETE AIR
+			OUTPUT deleted.ID,deleted.TableName,deleted.IndexName,deleted.Current_Fragmentation,deleted.BadPageSplits
+			FROM ROICore.[Admin].AgentIndexRebuilds air
+			JOIN (SELECT ID, COUNT(ID) OVER ( ORDER BY BadPageSplits DESC) RowNumber
+					FROM ROICore.[Admin].AgentIndexRebuilds air
+					WHERE TableName IN ('FileLogItem','FileAttribute')
+					  AND CreateDate = @Date) sub
+			  ON  sub.ID = air.Id
+			  AND sub.RowNumber <> 1;
       END                 --BEGIN at Line 258
 
 IF @RowCount = 0 RETURN;
 IF @ShowProcessSteps = 1
-    SELECT 'AgentIdexRebuilds, Line 331',GETDATE(),* FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
+    SELECT 'AgentIdexRebuilds, Line 331',GETDATE(),* FROM ROICore.[Admin].AgentIndexRebuilds WHERE CreateDate = @Date;
 
 /**********************************************************************
-     Reset TrackPageSplits Extended Event (make this a 24 hour capture), so reset every 24 hours
+     Reset TrackPageSplits Extended Event (make this a 24 hour capture)
 ***********************************************************************/
  
-																		--@@@@next code@@@@
  SET @command = N'
             -- Stop the Event Session to clear the target
             ALTER EVENT SESSION [SQLskills_TrackPageSplits]
@@ -378,7 +358,6 @@ SET @command = N'
    
 
     IF OBJECT_ID(N'tempdb..#Temp2') IS NOT NULL DROP TABLE #Temp2 
-																		--@@@@next code@@@@
     IF @WorkDay = 1              --only get redo row on weekdays
       BEGIN
         /************************************************************************
@@ -392,7 +371,7 @@ SET @command = N'
                 ,r.Record_Count,r.LagDays,r.FixFillFactor
                 ,i.is_primary_key, i.[type]
             INTO #Temp2
-            FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds r
+            FROM ROICore.[Admin].AgentIndexRebuilds r
             JOIN sys.indexes i
               ON  i.[Name]      = r.IndexName
               AND i.index_id    = r.index_id
@@ -402,7 +381,7 @@ SET @command = N'
               AND r.DelFlag     = 0
               AND @WorkDay      = 1
               AND r.ActionTaken = 'F'
-              AND NOT EXISTS (SELECT 1  FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds r2
+              AND NOT EXISTS (SELECT 1  FROM ROICore.[Admin].AgentIndexRebuilds r2
                                         WHERE r2.DBName          = @Database
                                           AND r2.SchemaName      = r.SchemaName
                                           AND r2.[Object_ID]     = r.[Object_ID]
@@ -411,9 +390,8 @@ SET @command = N'
                                           AND r2.DelFlag         = 0
                                           AND r2.DeadLockFound   = 1
                                           AND r2.ID              > r.ID)
-																							--@@@@next code@@@@
               --don't get partitioned tables (no adjusting fill factor)
-              -- select top 1 * from <TestDataBaseName>.[Admin].AgentIndexRebuilds
+              -- select top 1 * from ROICore.[Admin].AgentIndexRebuilds
               AND NOT EXISTS (SELECT 1 FROM sys.partitions p 
                                        WHERE p.object_id = r.Object_ID
                                          AND p.index_id  = r.Index_ID
@@ -425,13 +403,12 @@ SET @command = N'
 
             /**********************************************************************
                 Go back and recalculate FillFactor for oldest Table/Index 
-                    in <TestDataBaseName>.Admin.AgentIndexRebuilds
+                    in ROICore.Admin.AgentIndexRebuilds
             ***********************************************************************/
             IF @RowCount = 1         
               BEGIN
                 SET @RedoFlag = 1;
                 UPDATE #Temp2
-																							--@@@@next code@@@@
                     -- start pertubation cycle over again by resetting starting FillFactor  
                     SET [FillFactor] = CASE WHEN Index_ID > 1 
                                              AND is_primary_key = 1 
@@ -456,7 +433,7 @@ SET @command = N'
             ***********************************************************************/
                 UPDATE r
                     SET DelFlag = 1
-                    FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds r
+                    FROM ROICore.[Admin].AgentIndexRebuilds r
                     JOIN #Temp2 t
                       ON  t.DBName       = r.DBName
                       AND t.SchemaName   = r.SchemaName  
@@ -467,7 +444,7 @@ SET @command = N'
                       AND r.CreateDate   < @Date;
     
                 --add new row to start regression
-                   INSERT <TestDataBaseName>.[Admin].AgentIndexRebuilds
+                   INSERT ROICore.[Admin].AgentIndexRebuilds
                        (CreateDate,DBName,SchemaName,TableName,IndexName,PartitionNum,Current_Fragmentation,New_Fragmentation,BadPageSplits
                        ,[FillFactor],[Object_ID],[Index_ID],Page_Count,Record_Count,LagDays,FixFillFactor,DelFlag,DeadLockFound
                        ,IndexRebuildDuration,RedoFlag,ActionTaken)
@@ -479,20 +456,19 @@ SET @command = N'
                     SET @RowCount = @@ROWCOUNT;
                 
                 IF @ShowProcessSteps = 1 
-                    SELECT 'Redo row added to <TestDataBaseName>.Admin.AgentIndexRebuilds = ',@RowCount [@RowCount]
+                    SELECT 'Redo row added to ROICore.Admin.AgentIndexRebuilds = ',@RowCount [@RowCount]
               END            --Begin at Line 405
       END                    --BEGIN at Line 358
 
 
-																		--@@@@next code@@@@
-   IF EXISTS (SELECT 1 FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds WHERE CreateDate = @Date) 
+   IF EXISTS (SELECT 1 FROM ROICore.[Admin].AgentIndexRebuilds WHERE CreateDate = @Date) 
       BEGIN
         DECLARE [workcursor]  CURSOR FOR 
             SELECT  DISTINCT w.ID, w.DBName,w.SchemaName,w.[object_id], w.index_id
                     , w.partitionnum, w.Current_Fragmentation,w.[FillFactor]
                     ,w.TableName, w.IndexName
                     ,DATEDIFF(dd,(SELECT TOP 1 CreateDate
-                                      FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds r 
+                                      FROM ROICore.[Admin].AgentIndexRebuilds r 
                                       WHERE r.DBName        = @Database
                                         AND r.SchemaName    = w.SchemaName
                                         AND r.TableName     = w.TableName
@@ -504,7 +480,7 @@ SET @command = N'
                                         AND r.CreateDate    < @Date
                                       ORDER BY r.ID DESC)    ,@Date) LagDate
                     ,w.RedoFlag
-                FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds w
+                FROM ROICore.[Admin].AgentIndexRebuilds w
                 WHERE w.CreateDate = @Date
                 ORDER BY w.TableName ASC, w.index_id ASC;    --changed to index_id to rebuild CI before NCIndexes
 
@@ -513,7 +489,7 @@ SET @command = N'
                     , w.partitionnum, w.Current_Fragmentation,w.[FillFactor]
                     ,w.TableName, w.IndexName
                     ,DATEDIFF(dd,(SELECT TOP 1 CreateDate
-                                      FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds r 
+                                      FROM ROICore.[Admin].AgentIndexRebuilds r 
                                       WHERE r.DBName        = @Database
                                         AND r.SchemaName    = w.SchemaName
                                         AND r.TableName     = w.TableName
@@ -525,7 +501,7 @@ SET @command = N'
                                         AND r.CreateDate    < @Date
                                       ORDER BY r.ID DESC)    ,@Date) LagDate
                     ,w.RedoFlag
-                FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds w
+                FROM ROICore.[Admin].AgentIndexRebuilds w
                 WHERE w.CreateDate = @Date
                 ORDER BY w.TableName ASC, w.Index_ID ASC;    
 
@@ -539,19 +515,18 @@ SET @command = N'
 
         WHILE @@FETCH_STATUS = 0 
           BEGIN 
-             SET @Retry = 6;                            --this can be changed
-            SET @DeadLockFound = 0;
-            SET @Error = 0;
-            SET @StartTime = GETDATE();
+		 	SET @Retry = 6;							--this can be changed
+			SET @DeadLockFound = 0;
+			SET @Error = 0;
+			SET @StartTime = GETDATE();
             IF @ShowProcessSteps = 1 
                 SELECT 'WorkCursor parameters, Line 496',GETDATE(), @ID [@ID],@objectid [@objectid]
-                        , @indexid [@indexid], @partitionnum [@partitionnum]
-                        , @frag [@frag], @FillFactor [@FillFactor], @objectname [@objectname]
-                        , @indexname [@indexname], @LagDate [@LagDate], @RedoFlag [@RedoFlag] 
+				        , @indexid [@indexid], @partitionnum [@partitionnum]
+						, @frag [@frag], @FillFactor [@FillFactor], @objectname [@objectname]
+						, @indexname [@indexname], @LagDate [@LagDate], @RedoFlag [@RedoFlag] 
 
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL DROP TABLE #Temp3    
 
-																		--@@@@next code@@@@
 /**********************************************************************
     New logic:  Check at least 6 rebuilds in history table and select
          fillfactor where the last 2 rebuilds had a larger fragmentation.
@@ -563,75 +538,74 @@ SET @command = N'
         --check index rebuild table for at least six entries for this index (this logic sets FixFillFactor when appropriate)
         IF @WorkDay = 1
           BEGIN 
-            SET @NewFillFactor = NULL;
-            SET @FixFillFactor = NULL;
+		    SET @NewFillFactor = NULL;
+			SET @FixFillFactor = NULL;
             IF OBJECT_ID(N'tempdb..#Temp4') IS NOT NULL DROP TABLE #Temp4
             SELECT ID,Current_Fragmentation
                     ,Row_Number() OVER (ORDER BY ID ASC) RowNumber,[FillFactor]
                     ,FixFillFactor,TableName,IndexName,BadPageSplits
                 INTO #Temp4
-                FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds
+                FROM ROICore.[Admin].AgentIndexRebuilds
                 WHERE DBName                = @Database
-                  AND [OBJECT_ID]            = @objectid
-                  AND Index_ID                = @indexid
-                  AND PartitionNum            = @partitionnum
-                  AND DelFlag                = 0
-                  AND DeadLockFound         = 0
-                  AND ActionTaken           = 'F'
-                  AND Current_Fragmentation    > 0.0
+                  AND [OBJECT_ID]			= @objectid
+                  AND Index_ID				= @indexid
+                  AND PartitionNum			= @partitionnum
+				  AND DelFlag				= 0
+				  AND DeadLockFound         = 0
+				  AND ActionTaken           = 'F'
+				  AND Current_Fragmentation	> 0.0
                 ORDER BY ID ASC;
-            SET @RowCount = @@ROWCOUNT;
+			SET @RowCount = @@ROWCOUNT;
     
             IF @ShowProcessSteps = 1 
-              BEGIN
-                SELECT 'Checking from previous perturbs on this index, Line 535',GETDATE(),* FROM #Temp4;
-                SELECT '@RowCount = ',@RowCount;
-              END             --BEGIN at Line 557
+			  BEGIN
+				SELECT 'Checking from previous perturbs on this index, Line 535',GETDATE(),* FROM #Temp4;
+				SELECT '@RowCount = ',@RowCount;
+			  END             --BEGIN at Line 557
 
-            IF @RowCount >= 6
-                BEGIN
-                    SELECT  @MaxID           = MAX(ID),
-                            @MinID           = MIN(ID),
-                            @MaxRowNumber    = MAX(RowNumber),
-                            @MinRowNumber    = MIN(RowNumber)
-                        FROM #Temp4;
-                    SET @MinFrag = (SELECT MIN(Current_Fragmentation) FROM #Temp4);
-                    SET @MinFragID = (SELECT MIN(ID) FROM #Temp4 WHERE Current_Fragmentation = @MinFrag);
+			IF @RowCount >= 6
+				BEGIN
+		            SELECT  @MaxID           = MAX(ID),
+		                    @MinID           = MIN(ID),
+		                    @MaxRowNumber    = MAX(RowNumber),
+		                    @MinRowNumber    = MIN(RowNumber)
+		                FROM #Temp4;
+					SET @MinFrag = (SELECT MIN(Current_Fragmentation) FROM #Temp4);
+					SET @MinFragID = (SELECT MIN(ID) FROM #Temp4 WHERE Current_Fragmentation = @MinFrag);
         
-                    SELECT @MinFragBadPageSplits    = BadPageSplits,
-                           @NewFillFactor            = [FillFactor],
-                           @FragRowNumber            = RowNumber
-                        FROM #Temp4
-                        WHERE ID               = @MinFragID
-                          AND RowNumber        <= @MaxRowNumber - 2;  --This was suggested during presentation at SQL Saturday Baton Rouge
+		            SELECT @MinFragBadPageSplits    = BadPageSplits,
+		                   @NewFillFactor            = [FillFactor],
+		                   @FragRowNumber            = RowNumber
+		                FROM #Temp4
+		                WHERE ID               = @MinFragID
+		                  AND RowNumber        <= @MaxRowNumber - 2;  --This was suggested during presentation at SQL Saturday Baton Rouge
     
-                    IF @NewFillFactor IS NOT NULL
-                      BEGIN
-                        SET @FillFactor    = @NewFillFactor;
-                        SET @FixFillFactor = @NewFillFactor;
+		            IF @NewFillFactor IS NOT NULL
+		              BEGIN
+						SET @FillFactor    = @NewFillFactor;
+		                SET @FixFillFactor = @NewFillFactor;
 
-                        UPDATE <TestDataBaseName>.[Admin].AgentIndexRebuilds            --update FixFillFactor for new row
-                            SET FixFillFactor = @NewFillFactor,
-                                DelFlag       = 0
-                            WHERE ID = @ID;
+						UPDATE ROICore.[Admin].AgentIndexRebuilds			--update FixFillFactor for new row
+		                    SET FixFillFactor = @NewFillFactor,
+								DelFlag       = 0
+							WHERE ID = @ID;
 
-                        UPDATE r                                    -- go back and update all previous rows
-                            SET FixFillFactor = @NewFillFactor,
-                                DelFlag       = 1    --DelFlag all other rows
-                            FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds r
-                            JOIN #Temp4 t
-                              ON t.ID = r.ID
+		                UPDATE r                                    -- go back and update all previous rows
+		                    SET FixFillFactor = @NewFillFactor,
+								DelFlag       = 1	--DelFlag all other rows
+							FROM ROICore.[Admin].AgentIndexRebuilds r
+							JOIN #Temp4 t
+							  ON t.ID = r.ID
 
                         IF @ShowProcessSteps = 1
-                            SELECT 'New FixFillFactor set', * FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds WHERE ID = @ID;
-                      END    --Begin at Line 596
-                END          --BEGIN at Line 579
-          END                --Begin at Line 5552
+							SELECT 'New FixFillFactor set', * FROM ROICore.[Admin].AgentIndexRebuilds WHERE ID = @ID;
+					  END	--Begin at Line 580
+				END			--BEGIN at Line 563
+          END				--Begin at Line 536
 
-            IF @ShowProcessSteps = 1
-                SELECT 'FixFillFactor, line 580',GETDATE(),@FixFillFactor [@FixFillFactor], @indexname [@indexname]
+			IF @ShowProcessSteps = 1
+				SELECT 'FixFillFactor, line 580',GETDATE(),@FixFillFactor [@FixFillFactor], @indexname [@indexname]
 
-																		--@@@@next code@@@@
 /**********************************************************************
     Cannot reset fillfactor if table is partitioned, but can rebuild 
         the specified partition number
@@ -647,10 +621,9 @@ SET @command = N'
 
             SET @OldFillFactor = @FillFactor    
             IF @ShowProcessSteps = 1 
-                SELECT 'check for partitioned, line 625',GETDATE(),@PartitionFlag [@PartitionFlag], @OldFillFactor [@OldFillFactor]
+				SELECT 'check for partitioned, line 597',GETDATE(),@PartitionFlag [@PartitionFlag], @OldFillFactor [@OldFillFactor]
 
 
-																		--@@@@next code@@@@
 /**********************************************************************
      This is the logic for changing fill factor per index
      Clustered Indexes are perturbed by decrementing the current fill 
@@ -668,7 +641,7 @@ SET @command = N'
                                              @LagDate IS NULL 
                                              THEN 100
                                         WHEN @indexid = 1 AND 
-                                             @LagDate IS NOT NULL            -- was @LagDate < 30 
+                                             @LagDate IS NOT NULL			-- was @LagDate < 30 
                                              THEN @FillFactor -1
                                         --nonclustered indexes, 
                                         --  decrement fill factor 
@@ -694,38 +667,37 @@ SET @command = N'
                   BEGIN    
                     SET @FillFactor = 70    
                     SELECT 'FillFactor adjusted back to 70.', GETDATE();    
-                    UPDATE <TestDataBaseName>.[Admin].AgentIndexRebuilds
+                    UPDATE ROICore.[Admin].AgentIndexRebuilds
                         SET FixFillFactor  = @FillFactor
                         WHERE DBName       = @Database
                           AND Object_ID    = @objectid
                           AND Index_ID     = @indexid
                           AND PartitionNum = @partitionnum
-                          AND DelFlag      = 0
-                  END        --Begin at Line 663
-                END            --Begin at Line 633
+						  AND DelFlag      = 0
+                  END		--Begin at Line 663
+                END			--Begin at Line 633
             ELSE
                 SET @FillFactor = CASE WHEN @FixFillFactor IS NOT NULL
                                        THEN  @FixFillFactor
                                        ELSE @FillFactor END 
         IF @ShowProcessSteps = 1 
-            SELECT 'calculate new fillfactor, line 657',GETDATE(),@FillFactor [@FillFactor],@FixFillFactor [@FixFillFactor],@PartitionFlag [@PartitionFlag],@WorkDay [@WorkDay]
+			SELECT 'calculate new fillfactor, line 657',GETDATE(),@FillFactor [@FillFactor],@FixFillFactor [@FixFillFactor],@PartitionFlag [@PartitionFlag],@WorkDay [@WorkDay]
 
-  																		--@@@@next code@@@@
-          /**********************************************************
+            /**********************************************************
                 Index is not partitioned
             ***********************************************************/
             IF @PartitionFlag = 0 AND @WorkDay = 1
               BEGIN
-                UPDATE <TestDataBaseName>.[Admin].AgentIndexRebuilds
-                    SET ActionTaken = 'F'
-                    WHERE ID       = @ID
+			    UPDATE ROICore.[Admin].AgentIndexRebuilds
+					SET ActionTaken = 'F'
+					WHERE ID       = @ID
                 SET @command = N'SET QUOTED_IDENTIFIER ON     
-                    SET LOCK_TIMEOUT 20000;
-                    ALTER INDEX ' + @indexname +' ON <TestDataBaseName>.[' + @schemaname + 
+				    SET LOCK_TIMEOUT 20000;
+                    ALTER INDEX ' + @indexname +' ON ROICore.[' + @schemaname + 
                     N'].[' + @objectname + N'] REBUILD WITH (' + @online_on_string +
                     ' DATA_COMPRESSION = ROW,MAXDOP = 4,FILLFACTOR = '+
                     CONVERT(NVARCHAR(5),@FillFactor) + ');';   
-              END        --BEGIN at Line 686
+              END		--BEGIN at Line 686
 
             /**********************************************************
             IF Index is partitioned or this is Saturday or Sunday, 
@@ -733,200 +705,196 @@ SET @command = N'
             ***********************************************************/    
             IF @PartitionFlag = 1   
                BEGIN
-                UPDATE <TestDataBaseName>.[Admin].AgentIndexRebuilds
-                    SET ActionTaken = 'R'
-                    WHERE ID       = @ID
+			    UPDATE ROICore.[Admin].AgentIndexRebuilds
+					SET ActionTaken = 'R'
+					WHERE ID       = @ID
                  SET @FillFactor = @OldFillFactor    
                  SET @command = N'SET QUOTED_IDENTIFIER ON     
-                     SET LOCK_TIMEOUT 20000;
-                     ALTER INDEX ' + @indexname +' ON <TestDataBaseName>.[' + @schemaname 
+				     SET LOCK_TIMEOUT 20000;
+                     ALTER INDEX ' + @indexname +' ON ROICore.[' + @schemaname 
                      + N'].[' + @objectname + N'] REBUILD PARTITION = ' 
                      + CONVERT(VARCHAR(25),@PartitionNum) + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 4);';    
-               END        --BEGIN at Line 703
+               END		--BEGIN at Line 703
 
             IF @WorkDay = 0 AND @PartitionFlag = 0   
                BEGIN
-                UPDATE <TestDataBaseName>.[Admin].AgentIndexRebuilds
-                    SET ActionTaken = 'R'
-                    WHERE ID       = @ID
+			    UPDATE ROICore.[Admin].AgentIndexRebuilds
+					SET ActionTaken = 'R'
+					WHERE ID       = @ID
                  SET @command = N'SET QUOTED_IDENTIFIER ON 
-                     SET LOCK_TIMEOUT 20000;
-                     ALTER INDEX ' + @indexname +' ON <TestDataBaseName>.[' + @schemaname 
+				     SET LOCK_TIMEOUT 20000;
+                     ALTER INDEX ' + @indexname +' ON ROICore.[' + @schemaname 
                      + N'].[' + @objectname + N'] REBUILD ' + 
                      N' WITH (' + @online_on_string + 'DATA_COMPRESSION = ROW,MAXDOP = 4);';    
-               END        --BEGIN at Line 717
+               END		--BEGIN at Line 717
 
             IF @ShowDynamicSQLCommands = 1 SELECT GETDATE(),@command [@command]
 
             --Setup loop to see if any index is currently being rebuilt, if so loop until no result set
-            SET @Counter = 1
-              --Try Catch logic added because of errors caused by other on-going processes
+			SET @Counter = 1
+  			--Try Catch logic added because of errors caused by other on-going processes
             SET @Message = '';
-																		--@@@@next code@@@@
-            WHILE (@Retry > 0)
-                BEGIN
-                    BEGIN TRY
-                        SELECT GETDATE(), @Retry [@Retry];
+			WHILE (@Retry > 0)
+				BEGIN
+					BEGIN TRY
+						SELECT GETDATE(), @Retry [@Retry];
                         --Setup loop to see if any index is currently being rebuilt ONLINE, if no loop until no result set
-                        SET @Counter = 1
+			            SET @Counter = 1
                         WHILE @Counter = 1
-                        BEGIN                --this loop needed to prevent object concurrency error, checks to see if ONLINE operation already in existence
-                                            -- for the current index. If so, then loops every 5 seconds until ONLINE operation finished. (SS2012 issue only)
+                        BEGIN				--this loop needed to prevent object concurrency error, checks to see if ONLINE operation already in existence
+						                    -- for the current index. If so, then loops every 5 seconds until ONLINE operation finished. (SS2012 issue only)
                             IF NOT EXISTS (SELECT * FROM (SELECT r.session_id
                                                                 ,CONVERT(VARCHAR(1000),(SELECT SUBSTRING(text,r.statement_start_offset/2,
                                                                 CASE WHEN r.statement_end_offset = -1 THEN 1000 ELSE (r.statement_end_offset-r.statement_start_offset)/2 END)
                                                               FROM sys.dm_exec_sql_text(sql_handle))) AS IndexScript
                                                 FROM sys.dm_exec_requests r WHERE command IN ('Alter Index')) sub
                                                 WHERE sub.IndexScript LIKE '%ONLINE%'
-                                                  AND sub.IndexScript LIKE ('%' + @objectname + '%') )
+												  AND sub.IndexScript LIKE ('%' + @objectname + '%') )
                             BEGIN
-                                SET @Counter = 0;
-                                BREAK;
+							    SET @Counter = 0;
+								BREAK;
                             END         -- BEGIN at Line 750
-                            SELECT 'Looping', GETDATE()
-                            WAITFOR DELAY '00:00:05.000'                --5 second delay
-                        END              -- BEGIN at Line 741
-                        EXEC sys.sp_executesql @command
+							SELECT 'Looping', GETDATE()
+			                WAITFOR DELAY '00:00:05.000'				--5 second delay
+	                    END              -- BEGIN at Line 741
+						EXEC sys.sp_executesql @command
                         CHECKPOINT;                                                      --added to ensure transaction log backup getting everything
-                        SET @Retry = 0;
-                    END TRY
-                    BEGIN CATCH
-                        SELECT @Error = @@ERROR,@ObjectName = Object_Name(@@ProcID),@ErrorMessage = ERROR_MESSAGE(),@ErrorSeverity    = ERROR_SEVERITY(),@ErrorState = ERROR_STATE(),@ErrorLine = ERROR_LINE(); 
-                        SET @Message = N'********************ErrorMsg: ' + @ObjectName + N', Line ' + CONVERT(NVARCHAR(20),@ErrorLine) + N', ' + @ErrorMessage;
-                        SELECT @Error [@Error], @Message [@Message];
-                        SET @retry = @retry - 1;
+						SET @Retry = 0;
+					END TRY
+					BEGIN CATCH
+						SELECT @Error = @@ERROR,@ObjectName = Object_Name(@@ProcID),@ErrorMessage = ERROR_MESSAGE(),@ErrorSeverity	= ERROR_SEVERITY(),@ErrorState = ERROR_STATE(),@ErrorLine = ERROR_LINE(); 
+						SET @Message = N'********************ErrorMsg: ' + @ObjectName + N', Line ' + CONVERT(NVARCHAR(20),@ErrorLine) + N', ' + @ErrorMessage;
+		                SELECT @Error [@Error], @Message [@Message];
+		                SET @retry = @retry - 1;
 
-                        IF (@retry > 0 )
-                                -- use a delay if there is a high rate of write conflicts (41302)
-                                --   length of delay should depend on the typical duration of conflicting transactions
-                            BEGIN
-                                WAITFOR DELAY '00:01:00.000'                --60 seconds delay
-                                SELECT @@SPID [@@SPID];
-                                CONTINUE;
-                            END           -- BEGIN at 770
-                        ELSE       
-                            BEGIN
-                                SELECT 'Error at Line 754',GETDATE(),@Message;
-                                SELECT 'Retry errored out for', @Command;
-                                SET @DeadLockFound = CASE WHEN @Error = 1205 THEN 1
-                                             ELSE 0 END;
-                                UPDATE <TestDataBaseName>.[Admin].AgentIndexRebuilds
-                                    SET ActionTaken   = 'E',
-                                        DeadLockFound = @DeadLockFound,
-                                        LagDays       = @LagDate
-                                    WHERE ID          = @ID;
-                                BREAK;
-                            END    --BEGIN at Line 792
+					    IF (@retry > 0 )
+						        -- use a delay if there is a high rate of write conflicts (41302)
+						        --   length of delay should depend on the typical duration of conflicting transactions
+							BEGIN
+								WAITFOR DELAY '00:01:00.000'				--60 seconds delay
+								SELECT @@SPID [@@SPID];
+								CONTINUE;
+							END           -- BEGIN at 770
+						ELSE       
+							BEGIN
+								SELECT 'Error at Line 754',GETDATE(),@Message;
+								SELECT 'Retry errored out for', @Command;
+								SET @DeadLockFound = CASE WHEN @Error = 1205 THEN 1
+											 ELSE 0 END;
+	                            UPDATE ROICore.[Admin].AgentIndexRebuilds
+	                                SET ActionTaken   = 'E',
+                				        DeadLockFound = @DeadLockFound,
+									    LagDays       = @LagDate
+	                                WHERE ID          = @ID;
+								BREAK;
+						    END    --BEGIN at Line 776
                     END CATCH
-                END                --BEGIN at Line 751
+				END		           --BEGIN at Line 735
 
 
-																		--@@@@next code@@@@
-            IF @Error = 0			-- no errors encounterd, update Admin.AgentIndexRebuilds
-              UPDATE air
-                SET IndexRebuildDuration = DATEDIFF(second,@StartTime,GETDATE()),
-                    New_Fragmentation = ps.avg_fragmentation_in_percent,
-                    LagDays = @LagDate,
-                    [FillFactor] = @FillFactor
-                FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds air
-                JOIN sys.dm_db_index_physical_stats 
-                     (@DatabaseID,@objectid,@indexid,@partitionnum,'SAMPLED') ps
-                  ON  ps.index_id         = air.index_id
-                  AND ps.[object_id]      = air.[object_id]
-                  AND ps.partition_number = air.partitionnum
-                  AND ps.index_level      = 0
-                WHERE air.ID                    = @ID
-                  AND ps.alloc_unit_type_desc = 'IN_ROW_DATA'
-                  AND ps.index_level          = 0;   
+			IF @Error = 0
+			  UPDATE air
+			    SET IndexRebuildDuration = DATEDIFF(second,@StartTime,GETDATE()),
+				    New_Fragmentation = ps.avg_fragmentation_in_percent,
+					LagDays = @LagDate,
+					[FillFactor] = @FillFactor
+				FROM ROICore.[Admin].AgentIndexRebuilds air
+			    JOIN sys.dm_db_index_physical_stats 
+			         (@DatabaseID,@objectid,@indexid,@partitionnum,'SAMPLED') ps
+			      ON  ps.index_id         = air.index_id
+			      AND ps.[object_id]      = air.[object_id]
+			      AND ps.partition_number = air.partitionnum
+			      AND ps.index_level      = 0
+				WHERE air.ID                    = @ID
+			      AND ps.alloc_unit_type_desc = 'IN_ROW_DATA'
+			      AND ps.index_level          = 0;   
 
-            IF @ShowProcessSteps = 1
-                BEGIN
-                  SELECT 'Row complete, Line 788',GETDATE(),* 
-                    FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds r
-                    WHERE r.ID              = @ID;
-                END        --BEGIN at Line 827
+			IF @ShowProcessSteps = 1
+				BEGIN
+				  SELECT 'Row complete, Line 788',GETDATE(),* 
+					FROM ROICore.[Admin].AgentIndexRebuilds r
+					WHERE r.ID              = @ID;
+				END		--BEGIN at Line 810
 
              SET @PartitionFlag = 0; 
              FETCH NEXT FROM [workcursor] 
                  INTO @ID,@Database,@SchemaName,@objectid, @indexid, @partitionnum, @frag, @FillFactor
                      ,@objectname,@indexname,@LagDate,@RedoFlag;    
-          END        --Begin at line 529 (start of cursor while block)
+          END		--Begin at line 513 (start of cursor while block)
           -- Close and deallocate the cursor. 
             CLOSE [workcursor];     
             DEALLOCATE [workcursor];    
          IF @ShowProcessSteps = 1 
-            SELECT 'CLOSE [workcursor] ',GETDATE();      
+			SELECT 'CLOSE [workcursor] ',GETDATE();      
 
-            --clean up        
-             IF OBJECT_ID(N'tempdb..#Temp2') IS NOT NULL 
+            --clean up
+            IF OBJECT_ID(N'tempdb..#Temp2') IS NOT NULL 
                 DROP TABLE #Temp2;   
             IF OBJECT_ID(N'tempdb..#Temp3') IS NOT NULL 
                 DROP TABLE #Temp3;  
       END --Begin at Line 461  
     IF @ShowProcessSteps = 1 
-        SELECT 'cleanup', GETDATE();
+		SELECT 'cleanup', GETDATE();
 
-																		--@@@@next code@@@@
-    --Data retention -- three years in Admin.AgentIndexRebuilds table
-    DELETE <TestDataBaseName>.[Admin].AgentIndexRebuilds
+    --Data retention
+    DELETE ROICore.[Admin].AgentIndexRebuilds
         WHERE  CreateDate < DATEADD(yy,-3,@Date)
-           OR (CreateDate < DATEADD(yy,-1,@Date) AND DelFlag = 1);
+		   OR (CreateDate < DATEADD(yy,-1,@Date) AND DelFlag = 1);
     IF @ShowProcessSteps = 1 
-        SELECT 'Data retention',GETDATE();
+		SELECT 'Data retention',GETDATE();
 
-																		--@@@@next code@@@@
-    --Send email report of Indexes touched
-    IF OBJECT_ID(N'tempdb..#Temp5') IS NOT NULL DROP TABLE #Temp5
-    SELECT DISTINCT IndexName
-        , CONVERT(DEC(6,2),Current_Fragmentation) Frag
-        ,ISNULL(BadPageSplits,0) BadPageSplits
-        ,Page_Count [PageCount]
-        ,[FillFactor]
-        ,ISNULL(CONVERT(VARCHAR(7),LagDays),'       ') LagDays
-        ,ISNULL(CONVERT(VARCHAR(4),RedoFlag),'     ') Redo
-        ,ActionTaken [Action]
-        ,ISNULL(CONVERT(VARCHAR(6),FixFillFactor),'   ') Fix
-        ,ISNULL(CONVERT(VARCHAR(10),IndexRebuildDuration),'     ') Duration
-    INTO #Temp5
-    FROM <TestDataBaseName>.[Admin].AgentIndexRebuilds
-    WHERE CreateDate = @Date
-    ORDER BY IndexName;
-    SET @RowCount = @@ROWCOUNT;
+	--Send email report of Indexes touched
+	IF OBJECT_ID(N'tempdb..#Temp5') IS NOT NULL DROP TABLE #Temp5
+	SELECT DISTINCT IndexName
+		, CONVERT(DEC(6,2),Current_Fragmentation) Frag
+		,ISNULL(BadPageSplits,0) BadPageSplits
+		,Page_Count [PageCount]
+		,[FillFactor]
+		,ISNULL(CONVERT(VARCHAR(7),LagDays),'       ') LagDays
+		,ISNULL(CONVERT(VARCHAR(4),RedoFlag),'     ') Redo
+		,ActionTaken [Action]
+		,ISNULL(CONVERT(VARCHAR(6),FixFillFactor),'   ') Fix
+		,ISNULL(CONVERT(VARCHAR(10),IndexRebuildDuration),'     ') Duration
+	INTO #Temp5
+	FROM ROICore.[Admin].AgentIndexRebuilds
+	WHERE CreateDate = @Date
+	ORDER BY IndexName;
+	SET @RowCount = @@ROWCOUNT;
 
     IF @ShowProcessSteps = 1 
-        SELECT 'EMail query',GETDATE(),* from #Temp5
+		SELECT 'EMail query',GETDATE(),* from #Temp5
 
-    SET @xml = CAST(( SELECT [IndexName] AS 'td','',[Frag] AS 'td','', [BadPageSplits] AS 'td','', [PageCount]  AS 'td','', [FillFactor] AS 'td','', [LagDays] AS 'td','', [Redo] AS 'td','', [Action] AS 'td','', [Fix] AS 'td','',[Duration] AS 'td'
-        FROM #Temp5
-        ORDER BY IndexName 
-    FOR XML PATH('tr'), ELEMENTS ) AS NVARCHAR(MAX))
+	SET @xml = CAST(( SELECT [IndexName] AS 'td','',[Frag] AS 'td','', [BadPageSplits] AS 'td','', [PageCount]  AS 'td','', [FillFactor] AS 'td','', [LagDays] AS 'td','', [Redo] AS 'td','', [Action] AS 'td','', [Fix] AS 'td','',[Duration] AS 'td'
+		FROM #Temp5
+		ORDER BY IndexName 
+	FOR XML PATH('tr'), ELEMENTS ) AS NVARCHAR(MAX))
 
 
-    SET @body ='<html><body><H3>SQLAgent FillFactor for '+CONVERT(NVARCHAR(10),@Date,112) + '</H3>
+	SET @body ='<html><body><H3>SQLAgent FillFactor for '+CONVERT(NVARCHAR(10),@Date,112) + '</H3>
 <table border = 1> 
 <tr>
 <th> IndexName </th> <th> Frag </th> <th> BadPageSplits </th> <th> PageCount </th> <th> FillFactor </th>  <th> LagDays </th>  <th> Redo </th>  <th> Action </th>  <th> FIX </th>  <th> DURATION </th> </tr>'    
  
-    SET @body = @body + @xml +'</table></body></html>';
-    SET @Message = 'SQL Agent FillFactor Report from ' + @SvrName;
+	SET @body = @body + @xml +'</table></body></html>';
+	SET @Message = 'SQL Agent FillFactor Report from ' + @SvrName;
 
     IF @ShowProcessSteps = 1
-        SELECT 'Sending Fillfactor email ',GETDATE(),@Database [@Database];
+		SELECT 'Sending Fillfactor email ',GETDATE(),@Database [@Database];
 
-    EXEC msdb.dbo.sp_send_dbmail
-    @profile_name = @ProfileName, -- replace with your SQL Database Mail Profile (see line 107)
-    @body = @body,
-    @body_format ='HTML',
-    @recipients = 'mbyrdtx@gmail.com', -- replace with your email address
-    @subject = @Message ;
+	EXEC msdb.dbo.sp_send_dbmail
+	@profile_name = @ProfileName, -- replace with your SQL Database Mail Profile (see lines 100-102)
+	@body = @body,
+	@body_format ='HTML',
+	@recipients = 'mbyrdtx@gmail.com', -- replace with your email address
+	@subject = @Message ;
 
-    IF OBJECT_ID(N'tempdb..#Temp5') IS NOT NULL DROP TABLE #Temp5
+	IF OBJECT_ID(N'tempdb..#Temp5') IS NOT NULL DROP TABLE #Temp5
 
-    --Big $64 question is do I want to keep the R (rebuild) and E (Error) ActionTaken rows in the history table.  Right now they remain!
-    --DELETE [Admin].AgentIndexRebuilds
-    --    WHERE ActionTaken IN ('R','E');
+	--Big $64 question is do I want to keep the R (rebuild) and E (Error) ActionTaken rows in the history table.  Right now they remain!
+	--DELETE [Admin].AgentIndexRebuilds
+	--	WHERE ActionTaken IN ('R','E');
 
-  END        --Begin at Line 120
+  END		--Begin at Line 119
 RETURN;
 GO
