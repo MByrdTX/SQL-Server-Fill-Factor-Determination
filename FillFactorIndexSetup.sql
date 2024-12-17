@@ -59,36 +59,34 @@ code setup for Always On Primary Node; comment out next 4 statements
         IF OBJECT_ID(N'Admin.AgentIndexRebuilds') IS NULL
             EXEC sp_executesql N'
 SET ANSI_NULLS ON
---GO
 SET QUOTED_IDENTIFIER ON
---GO
-CREATE TABLE [Admin].AgentIndexRebuilds(
-	ID INT IDENTITY(1,1) NOT NULL,		--Primary Key
-	CREATEDATE DATETIME NOT NULL,		--Create date for row
-	DBName SYSNAME NOT NULL,			--Database Name	
-	SchemaName SYSNAME NOT NULL,		--Table/Index Schema
-	TableName SYSNAME NOT NULL,			--Table Name
-	IndexName SYSNAME NOT NULL,			--Index Name
-	PartitionNum INT NOT NULL,			--Partition Number 
-	Current_Fragmentation FLOAT NOT NULL,	--Index fragmentation in %
-	New_Fragmentation FLOAT NULL,		--Index fragmentation after rebuild
-	PageSplitForIndex BIGINT NULL,		--Good & Bad Page Split Count
-	BadPageSplits BIGINT NULL,			--Bad Page Split Count
-	New_PageSplitForIndex BIGINT NULL,	--Good & Bad Page Split Count after rebuild
-	PageAllocationCausedByPageSplit BIGINT NULL,	--Page splits at intermediate level
-	New_PageAllocationCausedByPageSplit BIGINT NULL,  --Page splits int lvl after rebuild
-	[FillFactor] INT NULL,				--Current Fill Factor
-	[Object_ID] INT NULL,				--Object ID
-	Index_ID INT NULL,					--Index ID
-	Page_Count BIGINT NULL,				--Page count for index
-	Record_Count BIGINT NULL,			--Record count for index
-	Forwarded_Record_Count BIGINT NULL, --n/a (heaps)
-	New_Forwarded_Record_Count BIGINT NULL,	--n/a (heaps)
-	LagDays INT NULL,					--# of days since last rebuild
-	FixFillFactor INT NULL,				--Final fill factor determination
-	DelFlag INT NULL,					--0 - active, 1 = soft delete
- CONSTRAINT PK_AgentIndexRebuilds PRIMARY KEY NONCLUSTERED 
-	(ID ASC) )
+CREATE TABLE [Admin].[AgentIndexRebuilds](
+	[ID] [int] IDENTITY(1,1) NOT NULL,          --Primary Key
+	[CreateDate] [date] NOT NULL,               --Create date for row   
+	[DBName] [sysname] NOT NULL,                --Database Name
+	[SchemaName] [sysname] NOT NULL,            --Table/Index Schema
+	[TableName] [sysname] NOT NULL,             --Table name
+	[IndexName] [sysname] NOT NULL,             --Index Name
+	[PartitionNum] [int] NOT NULL,              --Partition Number
+	[Current_Fragmentation] [float] NOT NULL,   --Index fragmentation in %
+	[New_Fragmentation] [float] NULL,           --Index fragmentation after rebuild
+	[BadPageSplits] [bigint] NULL,              --Good & Bad page split count
+	[FillFactor] [int] NULL,                    --Current FillFactor
+	[Object_ID] [int] NULL,                     --Object ID
+	[Index_ID] [int] NULL,                      --Index ID
+	[Page_Count] [bigint] NULL,                 --Page Count for Index
+	[Record_Count] [bigint] NULL,               --Record Count for index
+	[LagDays] [int] NULL,                       --# of days since last rebuild
+	[FixFillFactor] [int] NULL,                 --Final fill factor determination
+	[DelFlag] [bit] NULL,                       --0 - active; 1 = soft delete
+	[DeadLockFound] [bit] NULL,                 --Deadlock found during Rebuild
+	[IndexRebuildDuration] [int] NULL,          --Rebuild duration in seconds
+	[RedoFlag] [bit] NULL,                      --If deadlock found, RedoFlag = 1
+	[ActionTaken] [char](1) NULL,               --R = Rebuild only; E = Error; F = Find FillFactor 
+ CONSTRAINT [PK_AgentIndexRebuilds] PRIMARY KEY CLUSTERED 
+	([ID] ASC)
+	WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, FILLFACTOR = 98, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF, DATA_COMPRESSION = ROW) ON [PRIMARY]
+	) ON [PRIMARY]
 
 ALTER TABLE Admin.AgentIndexRebuilds ADD  DEFAULT (getdate()) FOR CREATEDATE'
     END
